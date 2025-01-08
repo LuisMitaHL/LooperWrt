@@ -11,6 +11,7 @@ ramips_setup_interfaces()
 	alfa-network,ax1800rm|\
 	ampedwireless,ally-r1900k|\
 	asus,rt-ax53u|\
+	confiabits,mt7621-v1|\
 	gehua,ghl-r-001|\
 	h3c,tx1800-plus|\
 	h3c,tx1801-plus|\
