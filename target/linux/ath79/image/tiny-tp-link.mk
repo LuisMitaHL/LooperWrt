@@ -11,7 +11,7 @@ endef
 TARGET_DEVICES += tplink_tl-mr10u
 
 define Device/tplink_tl-mr3020-v1
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   IMAGE_SIZE := 3840k
   SOC := ar9331
   DEVICE_MODEL := TL-MR3020
@@ -23,7 +23,7 @@ endef
 TARGET_DEVICES += tplink_tl-mr3020-v1
 
 define Device/tplink_tl-mr3040-v2
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   SOC := ar9331
   DEVICE_MODEL := TL-MR3040
   DEVICE_VARIANT := v2
@@ -45,7 +45,7 @@ endef
 TARGET_DEVICES += tplink_tl-mr3220-v1
 
 define Device/tplink_tl-mr3420-v1
-  $(Device/tplink-4m)
+  $(Device/tplink-8m)
   SOC := ar7241
   DEVICE_MODEL := TL-MR3420
   DEVICE_VARIANT := v1
@@ -374,7 +374,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr841-v5
 
 define Device/tplink_tl-wr841-v7
-  $(Device/tplink-4m)
+  $(Device/tplink-8m)
   SOC := ar7241
   DEVICE_MODEL := TL-WR841N/ND
   DEVICE_VARIANT := v7
@@ -394,7 +394,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr841-v8
 
 define Device/tplink_tl-wr841-v9
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   SOC := qca9533
   DEVICE_MODEL := TL-WR841N/ND
   DEVICE_VARIANT := v9
@@ -440,7 +440,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr841-v12
 
 define Device/tplink_tl-wr940n-v3
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   SOC := tp9343
   DEVICE_MODEL := TL-WR940N
   DEVICE_VARIANT := v3
@@ -464,7 +464,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr940n-v4
 
 define Device/tplink_tl-wr940n-v6
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   SOC := tp9343
   DEVICE_MODEL := TL-WR940N
   DEVICE_VARIANT := v6
@@ -478,7 +478,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr940n-v6
 
 define Device/tplink_tl-wr941-v2
-  $(Device/tplink-4m)
+  $(Device/tplink-8m)
   SOC := ar9132
   DEVICE_MODEL := TL-WR941ND
   DEVICE_VARIANT := v2/v3
@@ -505,7 +505,7 @@ endef
 TARGET_DEVICES += tplink_tl-wr941-v4
 
 define Device/tplink_tl-wr941nd-v5
-  $(Device/tplink-4mlzma)
+  $(Device/tplink-16mlzma)
   SOC := ar9341
   DEVICE_MODEL := TL-WR941ND
   DEVICE_VARIANT := v5
