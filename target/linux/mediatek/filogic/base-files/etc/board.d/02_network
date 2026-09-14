@@ -62,6 +62,7 @@ mediatek_setup_interfaces()
 	keenetic,kn-3711|\
 	keenetic,kn-3811|\
 	livinet,li320|\
+	laotrared,aurora-v1-ubootmod|\
 	netis,n6-v2|\
 	netis,nx32u|\
 	qihoo,360t7|\
@@ -284,6 +285,11 @@ mediatek_setup_macs()
 		label_mac=$(mtd_get_mac_ascii u-boot-env mac)
 		wan_mac=$label_mac
 		lan_mac=$(macaddr_add "$label_mac" 1)
+		;;
+	laotrared,aurora-v1-ubootmod)
+		label_mac=$(mtd_get_mac_binary "Factory" 0x4)
+		wan_mac=$label_mac
+		lan_mac=$(macaddr_setbit_la "$label_mac")
 		;;
 	mercusys,mr80x-v3|\
 	mercusys,mr85x)
