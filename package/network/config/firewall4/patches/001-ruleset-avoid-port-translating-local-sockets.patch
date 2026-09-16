@@ -1,0 +1,417 @@
+From 8fd64e1c46c4318280c86c533709c494c1e71e65 Mon Sep 17 00:00:00 2001
+From: Andris PE <neandris@gmail.com>
+Date: Fri, 10 Apr 2026 08:46:02 +0000
+Subject: [PATCH] ruleset: avoid port translating local sockets
+
+avoid allocating extra outgoing ports for local connections
+slipped past the lens while fixing CVE-2021-3773 in 21.late 22.early
+accidebtaly removes ianother strlen+strcmp (oifname) match from local
+sockets in default shipped config
+
+Signed-off-by: Andris PE <neandris@gmail.com>
+---
+ root/usr/share/firewall4/templates/ruleset.uc | 1 +
+ tests/01_configuration/01_ruleset             | 1 +
+ tests/01_configuration/02_rule_order          | 1 +
+ tests/02_zones/01_policies                    | 1 +
+ tests/02_zones/02_masq                        | 1 +
+ tests/02_zones/03_masq_src_dest_restrictions  | 1 +
+ tests/02_zones/04_masq_allow_invalid          | 1 +
+ tests/02_zones/04_wildcard_devices            | 1 +
+ tests/02_zones/05_subnet_mask_matches         | 1 +
+ tests/02_zones/06_family_selections           | 1 +
+ tests/02_zones/07_helpers                     | 1 +
+ tests/02_zones/08_log_limit                   | 1 +
+ tests/03_rules/01_direction                   | 1 +
+ tests/03_rules/02_enabled                     | 1 +
+ tests/03_rules/03_constraints                 | 1 +
+ tests/03_rules/04_icmp                        | 1 +
+ tests/03_rules/05_mangle                      | 1 +
+ tests/03_rules/06_subnet_mask_matches         | 1 +
+ tests/03_rules/07_redirect                    | 1 +
+ tests/03_rules/08_family_inheritance          | 1 +
+ tests/03_rules/09_time                        | 1 +
+ tests/03_rules/10_notrack                     | 1 +
+ tests/03_rules/11_log                         | 1 +
+ tests/03_rules/12_mark                        | 1 +
+ tests/04_forwardings/01_family_selections     | 1 +
+ tests/05_ipsets/01_declaration                | 1 +
+ tests/05_ipsets/02_usage                      | 1 +
+ tests/06_includes/01_nft_includes             | 1 +
+ tests/06_includes/02_firewall.user_include    | 1 +
+ tests/06_includes/04_disabled_include         | 1 +
+ tests/06_includes/05_automatic_includes       | 1 +
+ 31 files changed, 31 insertions(+)
+
+diff --git a/root/usr/share/firewall4/templates/ruleset.uc b/root/usr/share/firewall4/templates/ruleset.uc
+index 2bec4d9..51da48b 100644
+--- a/root/usr/share/firewall4/templates/ruleset.uc
++++ b/root/usr/share/firewall4/templates/ruleset.uc
+@@ -310,6 +310,7 @@ table inet fw4 {
+ {% for (let redirect in fw4.redirects("srcnat")): %}
+ 		{%+ include("redirect.uc", { fw4, zone: null, redirect }) %}
+ {% endfor %}
++		iif 0 return
+ {% for (let zone in fw4.zones()): %}
+ {%  if (zone.dflags.snat): %}
+ {%   for (let rule in zone.match_rules): %}
+diff --git a/tests/01_configuration/01_ruleset b/tests/01_configuration/01_ruleset
+index 108dff9..ce8c35a 100644
+--- a/tests/01_configuration/01_ruleset
++++ b/tests/01_configuration/01_ruleset
+@@ -238,6 +238,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "pppoe-wan" jump srcnat_wan comment "!fw4: Handle wan IPv4/IPv6 srcnat traffic"
+ 	}
+ 
+diff --git a/tests/01_configuration/02_rule_order b/tests/01_configuration/02_rule_order
+index c5c52a4..ac02b72 100644
+--- a/tests/01_configuration/02_rule_order
++++ b/tests/01_configuration/02_rule_order
+@@ -183,6 +183,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/02_zones/01_policies b/tests/02_zones/01_policies
+index e956ad4..dccf337 100644
+--- a/tests/02_zones/01_policies
++++ b/tests/02_zones/01_policies
+@@ -213,6 +213,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/02_zones/02_masq b/tests/02_zones/02_masq
+index aedc9bd..5d2b2c7 100644
+--- a/tests/02_zones/02_masq
++++ b/tests/02_zones/02_masq
+@@ -206,6 +206,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "zone1" jump srcnat_test1 comment "!fw4: Handle test1 IPv4/IPv6 srcnat traffic"
+ 		oifname "zone2" jump srcnat_test2 comment "!fw4: Handle test2 IPv4/IPv6 srcnat traffic"
+ 		oifname "zone3" jump srcnat_test3 comment "!fw4: Handle test3 IPv4/IPv6 srcnat traffic"
+diff --git a/tests/02_zones/03_masq_src_dest_restrictions b/tests/02_zones/03_masq_src_dest_restrictions
+index e173601..db903b7 100644
+--- a/tests/02_zones/03_masq_src_dest_restrictions
++++ b/tests/02_zones/03_masq_src_dest_restrictions
+@@ -206,6 +206,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "zone1" jump srcnat_test1 comment "!fw4: Handle test1 IPv4/IPv6 srcnat traffic"
+ 		oifname "zone2" jump srcnat_test2 comment "!fw4: Handle test2 IPv4/IPv6 srcnat traffic"
+ 	}
+diff --git a/tests/02_zones/04_masq_allow_invalid b/tests/02_zones/04_masq_allow_invalid
+index d5d1ccf..f0c9be4 100644
+--- a/tests/02_zones/04_masq_allow_invalid
++++ b/tests/02_zones/04_masq_allow_invalid
+@@ -131,6 +131,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "zone1" jump srcnat_test1 comment "!fw4: Handle test1 IPv4/IPv6 srcnat traffic"
+ 	}
+ 
+diff --git a/tests/02_zones/04_wildcard_devices b/tests/02_zones/04_wildcard_devices
+index 5e6809a..0a4a912 100644
+--- a/tests/02_zones/04_wildcard_devices
++++ b/tests/02_zones/04_wildcard_devices
+@@ -317,6 +317,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/02_zones/05_subnet_mask_matches b/tests/02_zones/05_subnet_mask_matches
+index 55c5635..3258312 100644
+--- a/tests/02_zones/05_subnet_mask_matches
++++ b/tests/02_zones/05_subnet_mask_matches
+@@ -183,6 +183,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/02_zones/06_family_selections b/tests/02_zones/06_family_selections
+index d766be7..c5321fb 100644
+--- a/tests/02_zones/06_family_selections
++++ b/tests/02_zones/06_family_selections
+@@ -316,6 +316,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/02_zones/07_helpers b/tests/02_zones/07_helpers
+index e4955a1..2c7a6a5 100644
+--- a/tests/02_zones/07_helpers
++++ b/tests/02_zones/07_helpers
+@@ -328,6 +328,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "zone1" jump srcnat_test1 comment "!fw4: Handle test1 IPv4/IPv6 srcnat traffic"
+ 		oifname "zone2" jump srcnat_test2 comment "!fw4: Handle test2 IPv4/IPv6 srcnat traffic"
+ 	}
+diff --git a/tests/02_zones/08_log_limit b/tests/02_zones/08_log_limit
+index 02bd201..f53673d 100644
+--- a/tests/02_zones/08_log_limit
++++ b/tests/02_zones/08_log_limit
+@@ -411,6 +411,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "br-lan" jump srcnat_lan comment "!fw4: Handle lan IPv4/IPv6 srcnat traffic"
+ 		meta nfproto ipv4 oifname "pppoe-wan" jump srcnat_wan comment "!fw4: Handle wan IPv4 srcnat traffic"
+ 	}
+diff --git a/tests/03_rules/01_direction b/tests/03_rules/01_direction
+index 535ffcb..d5a5a14 100644
+--- a/tests/03_rules/01_direction
++++ b/tests/03_rules/01_direction
+@@ -112,6 +112,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/02_enabled b/tests/03_rules/02_enabled
+index 9c14ed9..714f218 100644
+--- a/tests/03_rules/02_enabled
++++ b/tests/03_rules/02_enabled
+@@ -107,6 +107,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/03_constraints b/tests/03_rules/03_constraints
+index 76f4c0c..50e75bd 100644
+--- a/tests/03_rules/03_constraints
++++ b/tests/03_rules/03_constraints
+@@ -167,6 +167,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/04_icmp b/tests/03_rules/04_icmp
+index f9eec47..3bff838 100644
+--- a/tests/03_rules/04_icmp
++++ b/tests/03_rules/04_icmp
+@@ -119,6 +119,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/05_mangle b/tests/03_rules/05_mangle
+index fbb8141..df6fb7f 100644
+--- a/tests/03_rules/05_mangle
++++ b/tests/03_rules/05_mangle
+@@ -269,6 +269,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/06_subnet_mask_matches b/tests/03_rules/06_subnet_mask_matches
+index b397066..6f170f1 100644
+--- a/tests/03_rules/06_subnet_mask_matches
++++ b/tests/03_rules/06_subnet_mask_matches
+@@ -259,6 +259,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "pppoe-wan" jump srcnat_wan comment "!fw4: Handle wan IPv4/IPv6 srcnat traffic"
+ 		oifname "br-lan" jump srcnat_lan comment "!fw4: Handle lan IPv4/IPv6 srcnat traffic"
+ 		oifname "br-guest" jump srcnat_guest comment "!fw4: Handle guest IPv4/IPv6 srcnat traffic"
+diff --git a/tests/03_rules/07_redirect b/tests/03_rules/07_redirect
+index 80e24bb..58ae801 100644
+--- a/tests/03_rules/07_redirect
++++ b/tests/03_rules/07_redirect
+@@ -284,6 +284,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 		oifname "pppoe-wan" jump srcnat_wan comment "!fw4: Handle wan IPv4/IPv6 srcnat traffic"
+ 		oifname "br-lan" jump srcnat_lan comment "!fw4: Handle lan IPv4/IPv6 srcnat traffic"
+ 		oifname "wwan0" jump srcnat_noaddr comment "!fw4: Handle noaddr IPv4/IPv6 srcnat traffic"
+diff --git a/tests/03_rules/08_family_inheritance b/tests/03_rules/08_family_inheritance
+index 679f3b9..695ddee 100644
+--- a/tests/03_rules/08_family_inheritance
++++ b/tests/03_rules/08_family_inheritance
+@@ -269,6 +269,7 @@ table inet fw4 {
+ 		meta nfproto ipv4 counter masquerade comment "!fw4: NAT #3"
+ 		ip6 saddr fc00::/7 counter masquerade comment "!fw4: NAT #4"
+ 		counter masquerade comment "!fw4: NAT #6"
++		iif 0 return
+ 		meta nfproto ipv4 ip daddr 192.168.1.0/24 jump srcnat_ipv4only comment "!fw4: Handle ipv4only IPv4 srcnat traffic"
+ 	}
+ 
+diff --git a/tests/03_rules/09_time b/tests/03_rules/09_time
+index 63c7724..a64515b 100644
+--- a/tests/03_rules/09_time
++++ b/tests/03_rules/09_time
+@@ -188,6 +188,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/10_notrack b/tests/03_rules/10_notrack
+index 470f922..c27de00 100644
+--- a/tests/03_rules/10_notrack
++++ b/tests/03_rules/10_notrack
+@@ -214,6 +214,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/03_rules/11_log b/tests/03_rules/11_log
+index f777291..172042c 100644
+--- a/tests/03_rules/11_log
++++ b/tests/03_rules/11_log
+@@ -177,6 +177,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 	chain dstnat_wan {
+diff --git a/tests/03_rules/12_mark b/tests/03_rules/12_mark
+index 2744096..2c4a907 100644
+--- a/tests/03_rules/12_mark
++++ b/tests/03_rules/12_mark
+@@ -135,6 +135,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/04_forwardings/01_family_selections b/tests/04_forwardings/01_family_selections
+index 029501a..7262349 100644
+--- a/tests/04_forwardings/01_family_selections
++++ b/tests/04_forwardings/01_family_selections
+@@ -208,6 +208,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/05_ipsets/01_declaration b/tests/05_ipsets/01_declaration
+index 60c1514..2b8aec8 100644
+--- a/tests/05_ipsets/01_declaration
++++ b/tests/05_ipsets/01_declaration
+@@ -125,6 +125,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/05_ipsets/02_usage b/tests/05_ipsets/02_usage
+index 81ed6ed..e281bae 100644
+--- a/tests/05_ipsets/02_usage
++++ b/tests/05_ipsets/02_usage
+@@ -205,6 +205,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/06_includes/01_nft_includes b/tests/06_includes/01_nft_includes
+index d267f5c..a6252c1 100644
+--- a/tests/06_includes/01_nft_includes
++++ b/tests/06_includes/01_nft_includes
+@@ -218,6 +218,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/06_includes/02_firewall.user_include b/tests/06_includes/02_firewall.user_include
+index 1f83b04..e0bc67e 100644
+--- a/tests/06_includes/02_firewall.user_include
++++ b/tests/06_includes/02_firewall.user_include
+@@ -153,6 +153,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/06_includes/04_disabled_include b/tests/06_includes/04_disabled_include
+index 5b69540..876d70b 100644
+--- a/tests/06_includes/04_disabled_include
++++ b/tests/06_includes/04_disabled_include
+@@ -159,6 +159,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
+diff --git a/tests/06_includes/05_automatic_includes b/tests/06_includes/05_automatic_includes
+index 83322b9..a2e721c 100644
+--- a/tests/06_includes/05_automatic_includes
++++ b/tests/06_includes/05_automatic_includes
+@@ -159,6 +159,7 @@ table inet fw4 {
+ 
+ 	chain srcnat {
+ 		type nat hook postrouting priority srcnat; policy accept;
++		iif 0 return
+ 	}
+ 
+ 
