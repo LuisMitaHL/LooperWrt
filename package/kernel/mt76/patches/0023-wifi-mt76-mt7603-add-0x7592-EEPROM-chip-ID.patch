@@ -1,0 +1,33 @@
+From b8a7585d9bb68072590a8359f7588009994d5bd4 Mon Sep 17 00:00:00 2001
+From: Ahmed Naseef <naseefkm@gmail.com>
+Date: Sun, 19 Jul 2026 12:25:30 +0400
+Subject: [PATCH 23/64] wifi: mt76: mt7603: add 0x7592 EEPROM chip ID
+
+Some EcoNet based routers ship an on-flash EEPROM whose chip-id is
+0x7592 instead of the expected 0x7603. The device probes as PCI
+14c3:7603 and the hardware MT_HW_CHIPID register reports 0x7603,
+independent of the EEPROM value.
+
+This is seen across multiple EcoNet EN751221 and EN7528 based devices
+(for example the Genexis Platinum 4410).
+
+Signed-off-by: Ahmed Naseef <naseefkm@gmail.com>
+Link: https://patch.msgid.link/20260719082530.3879831-1-naseefkm@gmail.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit e053e8c780c8d021f4513fb19f49e95c0e80bbd2)
+---
+ mt7603/eeprom.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/mt7603/eeprom.c b/mt7603/eeprom.c
+index b89db2db..05f7aaef 100644
+--- a/mt7603/eeprom.c
++++ b/mt7603/eeprom.c
+@@ -142,6 +142,7 @@ static int mt7603_check_eeprom(struct mt76_dev *dev)
+ 	case 0x7628:
+ 	case 0x7603:
+ 	case 0x7600:
++	case 0x7592:
+ 		return 0;
+ 	default:
+ 		return -EINVAL;

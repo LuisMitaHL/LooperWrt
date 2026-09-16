@@ -1,0 +1,33 @@
+From 28d09109cd8ca53f3dcfd74b86266e590d504f4a Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Wed, 22 Jul 2026 08:26:03 +0000
+Subject: [PATCH 31/64] wifi: mt76: mt7915: write RX header translation bit to
+ the correct register
+
+MT_MDP_DCR0_RX_HDR_TRANS_EN is a field of MT_MDP_DCR0, but monitor-mode
+handling applied it to the per-band MT_DMA_DCR0 register instead. As a
+result RX header translation was never disabled in the MDP when entering
+monitor mode, and an undocumented bit of MT_DMA_DCR0 was toggled. Target
+MT_MDP_DCR0, matching the mt7996 driver.
+
+Fixes: b2491018587a ("wifi: mt76: mt7915: fix monitor mode issues")
+Link: https://patch.msgid.link/20260722082610.2699628-11-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit 5230bcf0f67e904c252397f02470d387ade4983d)
+---
+ mt7915/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/mt7915/main.c b/mt7915/main.c
+index cd454bf6..3e3f5088 100644
+--- a/mt7915/main.c
++++ b/mt7915/main.c
+@@ -493,7 +493,7 @@ static int mt7915_config(struct ieee80211_hw *hw, int radio_idx,
+ 
+ 		mt76_rmw_field(dev, MT_DMA_DCR0(band), MT_DMA_DCR0_RXD_G5_EN,
+ 			       enabled);
+-		mt76_rmw_field(dev, MT_DMA_DCR0(band), MT_MDP_DCR0_RX_HDR_TRANS_EN,
++		mt76_rmw_field(dev, MT_MDP_DCR0, MT_MDP_DCR0_RX_HDR_TRANS_EN,
+ 			       !dev->monitor_mask);
+ 		mt76_testmode_reset(phy->mt76, true);
+ 		mt76_wr(dev, MT_WF_RFCR(band), rxfilter);
