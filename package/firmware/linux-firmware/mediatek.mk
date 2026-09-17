@@ -78,11 +78,13 @@ define Package/mt7925bt-firmware/install
 endef
 $(eval $(call BuildPackage,mt7925bt-firmware))
 
+# MT7981 WO firmware is carried in files/mediatek: the 20240823 blob in
+# linux-firmware (and in mt76) is stale; MediaTek's vendor feed ships 20260323.
 Package/mt7981-wo-firmware = $(call Package/firmware-default,MT7981 offload firmware,,LICENCE.mediatek)
 define Package/mt7981-wo-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/mediatek
 	$(INSTALL_DATA) \
-		$(PKG_BUILD_DIR)/mediatek/mt7981_wo.bin \
+		$(CURDIR)/files/mediatek/mt7981_wo.bin \
 		$(1)/lib/firmware/mediatek
 endef
 $(eval $(call BuildPackage,mt7981-wo-firmware))
