@@ -1,0 +1,11 @@
+. /lib/functions.sh
+
+case "$(board_name)" in
+	laotrared,aurora-v1-ubootmod)
+		uci -q set system.@system[0].zram_size_mb='192'
+		uci -q set system.@system[0].zram_comp_algo='zstd'
+		uci -q commit system
+		;;
+esac
+
+exit 0
