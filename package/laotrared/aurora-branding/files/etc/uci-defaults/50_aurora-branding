@@ -1,0 +1,9 @@
+#!/bin/sh
+# aurora-branding: register the Aurora brand plugin with footstrap.
+# The theme loads each footstrap.settings.plugin entry as a LuCI module
+# after the chrome is wired (menu-footstrap-common.js: loadPlugins).
+
+uci -q add_list footstrap.settings.plugin='fs-brand-aurora'
+uci -q commit footstrap
+
+exit 0
