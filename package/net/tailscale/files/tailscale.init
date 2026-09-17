@@ -33,6 +33,11 @@ start_service() {
   # Disable logging to log.tailscale.com
   procd_append_param env TS_NO_LOGS_NO_SUPPORT=true
 
+  # Constrain the Go runtime on memory-tight devices: collect more eagerly
+  # (GOGC=20) and keep the heap under a soft 90 MiB ceiling (GOMEMLIMIT).
+  procd_append_param env GOGC=20
+  procd_append_param env GOMEMLIMIT=90MiB
+
   # Set the port to listen on for incoming VPN packets.
   # Remote nodes will automatically be informed about the new port number,
   # but you might want to configure this in order to set external firewall
