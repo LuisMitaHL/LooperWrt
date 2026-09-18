@@ -61,6 +61,14 @@ case "$(board_name)" in
 
 			uci -q commit wireless
 		fi
+
+		# Darkmoon autorate shaper: on, 4 s reflector interval, UL on wan.
+		if [ -e /etc/config/antilag ]; then
+			uci -q set antilag.primary.reflector_ping_interval_s='4'
+			uci -q set antilag.primary.enabled='1'
+			uci -q set antilag.primary.ul_if='wan'
+			uci -q commit antilag
+		fi
 		;;
 esac
 
