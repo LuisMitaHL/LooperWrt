@@ -1,0 +1,31 @@
+. /lib/functions.sh
+
+case "$(board_name)" in
+	laotrared,aurora-v1-ubootmod)
+		# uci-defaults re-run on the first boot after every flash,
+		# including a sysupgrade that keeps the settings. Apply the
+		# LooperWrt defaults only on top of a fresh (stock OpenWrt)
+		# configuration: never on an upgrade from LooperWrt.
+		if uci -q get looperwrt.zram_defaults.applied >/dev/null; then
+			exit 0
+		fi
+		# Builds before the marker existed lacked it. Detect already
+		# applied defaults by their own fingerprint so upgrading from
+		# those builds does not clobber user config either.
+		[ "$(uci -q get system.@system[0].zram_size_mb)" = '192' ] && exit 0
+
+		uci -q set system.@system[0].zram_size_mb='192'
+		uci -q set system.@system[0].zram_comp_algo='zstd'
+		uci -q commit system
+
+		# Mark the defaults as applied so later upgrades skip them.
+		# /etc/config/* is preserved by sysupgrade, so the marker
+		# survives as long as the user keeps their settings.
+		touch /etc/config/looperwrt
+		uci -q set looperwrt.zram_defaults=defaults
+		uci -q set looperwrt.zram_defaults.applied='1'
+		uci -q commit looperwrt
+		;;
+esac
+
+exit 0

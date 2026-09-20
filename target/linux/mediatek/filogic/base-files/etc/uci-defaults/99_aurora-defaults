@@ -1,0 +1,112 @@
+. /lib/functions.sh
+. /lib/functions/system.sh
+
+case "$(board_name)" in
+	laotrared,aurora-v1-ubootmod)
+		# uci-defaults re-run on the first boot after every flash,
+		# including a sysupgrade that keeps the settings. Apply the
+		# LooperWrt defaults only on top of a fresh (stock OpenWrt)
+		# configuration: never on an upgrade from LooperWrt.
+		if uci -q get looperwrt.aurora_defaults.applied >/dev/null; then
+			exit 0
+		fi
+		# Builds before the marker existed lacked it. Detect already
+		# applied defaults by their own fingerprint so upgrading from
+		# those builds does not clobber user config either.
+		_hostname=$(uci -q get system.@system[0].hostname)
+		uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && _hostname='LaOtraRed'
+		[ "$_hostname" = 'LaOtraRed' ] && exit 0
+
+		uci -q set system.@system[0].hostname='LaOtraRed'
+		uci -q set system.@system[0].zonename='America/La_Paz'
+		uci -q set system.@system[0].timezone='<-04>4'
+		uci -q set system.@system[0].log_size='1024'
+		uci -q commit system
+		uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
+		uci -q commit dhcp
+		uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
+		uci -q commit luci
+		uci -q set footstrap.settings.layout='sidebar'
+		uci -q set footstrap.settings.palette='hicontrast'
+		uci -q commit footstrap
+		uci -q set uhttpd.main.redirect_https='1'
+		uci -q commit uhttpd
+
+		# Enable wifi by default with a per-device SSID.
+		# SSID is LOR_<last 3 label-MAC octets, upper case>
+		# (e.g. LOR_102030), key is always 12345678.
+		# The mode follows what the radio supports: HE20/HE80
+		# on AX hardware (EHT is normalized to HE), HT20/VHT80
+		# on N/AC hardware. Channel 6 on 2.4 GHz, 149 on
+		# 5 GHz, country BO, txpower 18/20 dBm.
+		# /sbin/wifi config already ran in init.d boot, so the
+		# radio sections exist; match them by band, not by index.
+		if [ -e /etc/config/wireless ]; then
+			_mac=$(mtd_get_mac_binary Factory 0x4 2>/dev/null)
+			[ -n "$_mac" ] || _mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
+			_mac=$(macaddr_canonicalize "$_mac" 2>/dev/null)
+			_suffix=$(printf '%s' "$_mac" | tr -d ':' | tr 'a-f' 'A-F' | tail -c 6)
+			[ -n "$_suffix" ] || _suffix='000000'
+
+			for _dev in $(uci -q show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-device/\1/p'); do
+				_band=$(uci -q get "wireless.$_dev.band")
+				_cur=$(uci -q get "wireless.$_dev.htmode")
+				_htmode=''
+				case "$_band" in
+					2g)
+						_channel='6'
+						_txpower='18'
+						case "$_cur" in
+							HE*|EHT*) _htmode='HE20' ;;
+							HT*|VHT*) _htmode='HT20' ;;
+						esac
+						;;
+					5g)
+						_channel='149'
+						_txpower='20'
+						case "$_cur" in
+							HE*|EHT*) _htmode='HE80' ;;
+							VHT*) _htmode='VHT80' ;;
+						esac
+						;;
+					*)
+						continue
+						;;
+				esac
+				uci -q set wireless."$_dev".disabled='0'
+				uci -q set wireless."$_dev".country='BO'
+				uci -q set wireless."$_dev".channel="$_channel"
+				[ -n "$_htmode" ] && uci -q set wireless."$_dev".htmode="$_htmode"
+				uci -q set wireless."$_dev".txpower="$_txpower"
+			done
+
+			for _iface in $(uci -q show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface/\1/p'); do
+				uci -q set wireless."$_iface".disabled='0'
+				uci -q set wireless."$_iface".encryption='psk2'
+				uci -q set wireless."$_iface".ssid="LOR_$_suffix"
+				uci -q set wireless."$_iface".key='12345678'
+				uci -q set wireless."$_iface".dtim_period='3'
+			done
+
+			uci -q commit wireless
+		fi
+
+		# Darkmoon autorate shaper: on, 4 s reflector interval, UL on wan.
+		if [ -e /etc/config/antilag ]; then
+			uci -q set antilag.primary.reflector_ping_interval_s='4'
+			uci -q set antilag.primary.enabled='1'
+			uci -q set antilag.primary.ul_if='wan'
+			uci -q commit antilag
+		fi
+
+		# Mark the defaults as applied so later upgrades skip them.
+		# /etc/config/* is preserved by sysupgrade, so the marker
+		# survives as long as the user keeps their settings.
+		touch /etc/config/looperwrt
+		uci -q set looperwrt.aurora_defaults=defaults
+		uci -q set looperwrt.aurora_defaults.applied='1'
+		uci -q commit looperwrt
+		;;
+esac
+
+exit 0

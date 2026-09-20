@@ -2260,7 +2260,7 @@ define Device/laotrared_aurora-v1-ubootmod
   DEVICE_VARIANT := v1 (OpenWrt U-Boot layout)
   DEVICE_DTS := mt7981b-laotrared-aurora-v1-ubootmod
   DEVICE_DTS_DIR := ../dts
-  DEVICE_PACKAGES := kmod-usb3 kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware
+  DEVICE_PACKAGES := kmod-usb3 kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware aurora-branding luci-i18n-adblock-es luci-i18n-base-es luci-i18n-firewall-es luci-i18n-fluent-es luci-i18n-footstrap-es luci-i18n-mwan3-es luci-i18n-package-manager-es luci-i18n-usteer-es
   UBINIZE_OPTS := -E 5
   BLOCKSIZE := 128k
   PAGESIZE := 2048

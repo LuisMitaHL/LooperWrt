@@ -1,0 +1,22 @@
+#!/bin/sh
+# aurora-branding: register the Aurora brand plugin with footstrap and
+# install the Aurora favicons over the theme's.
+#
+# The plugin (footstrap.settings.plugin) is loaded by the theme on every
+# admin page (menu-footstrap-common.js: loadPlugins). The favicons cannot
+# ship at their final paths: apk refuses files owned by two packages, so
+# they travel as payloads under /usr/share/aurora-branding and are copied
+# into place here, on first boot. /lib/upgrade/keep.d/aurora-branding
+# preserves those copies across sysupgrade (uci-defaults never re-run).
+
+uci -q add_list footstrap.settings.plugin='fs-brand-aurora'
+uci -q commit footstrap
+
+if [ -d /www/luci-static/footstrap ]; then
+	for f in logo.svg logo_48.png app-icon-192.png; do
+		[ -f "/usr/share/aurora-branding/$f" ] &&
+			cp -f "/usr/share/aurora-branding/$f" "/www/luci-static/footstrap/$f"
+	done
+fi
+
+exit 0
