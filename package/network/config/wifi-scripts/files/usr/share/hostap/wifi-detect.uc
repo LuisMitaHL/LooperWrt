@@ -248,7 +248,13 @@ function wiphy_detect() {
 
 cleanup();
 wiphy_detect();
-if (!is_equal(prev_board_data, board_data)) {
+// Skip the write when detection came up empty but the previous board data
+// still lists radios (GET_WIPHY returns nothing when called too early at
+// boot, before the driver registers the phys). Writing the empty result
+// would wear the flash and force a second write once the hotplug rerun
+// sees the real phys.
+if (!is_equal(prev_board_data, board_data) &&
+    (length(board_data.wlan) || !length(prev_board_data.wlan))) {
 	let new_file = board_file + ".new";
 	unlink(new_file);
 	let f = open(new_file, "wx");
