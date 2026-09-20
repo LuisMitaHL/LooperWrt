@@ -82,6 +82,16 @@ case "$(board_name)" in
 			uci -q commit antilag
 		fi
 
+		# Tailscale direct traffic: allow inbound UDP on the fixed
+		# tailscaled port.
+		uci -q set firewall.tailscale_udp=rule
+		uci -q set firewall.tailscale_udp.name='Allow-Tailscale-UDP'
+		uci -q set firewall.tailscale_udp.src='wan'
+		uci -q set firewall.tailscale_udp.proto='udp'
+		uci -q set firewall.tailscale_udp.dest_port='41641'
+		uci -q set firewall.tailscale_udp.target='ACCEPT'
+		uci -q commit firewall
+
 		# Mark the defaults as applied so later upgrades skip them.
 		# /etc/config/* is preserved by sysupgrade, so the marker
 		# survives as long as the user keeps their settings.
