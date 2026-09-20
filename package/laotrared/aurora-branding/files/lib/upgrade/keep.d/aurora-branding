@@ -1,0 +1,8 @@
+# Aurora favicons installed over the footstrap theme by the
+# aurora-branding uci-defaults (50_aurora-branding). They live in the
+# /www overlay, which a sysupgrade wipes; list them here so they are
+# preserved. Same mechanism the theme itself uses for admin uploads
+# (keep.d/luci-theme-footstrap).
+/www/luci-static/footstrap/logo.svg
+/www/luci-static/footstrap/logo_48.png
+/www/luci-static/footstrap/app-icon-192.png
