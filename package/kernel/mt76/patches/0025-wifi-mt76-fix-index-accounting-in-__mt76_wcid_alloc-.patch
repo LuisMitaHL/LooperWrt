@@ -1,0 +1,47 @@
+From bcdc1941d953d6c9a814d0150ea32a35569a50f0 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Fri, 17 Jul 2026 04:15:51 +0200
+Subject: [PATCH 25/64] wifi: mt76: fix index accounting in __mt76_wcid_alloc
+ for offset ranges
+
+The allocator advances the mask pointer by min / 32 words but computes
+the returned index relative to the shifted base, while the size bound
+check treats the same value as absolute. For the WED WDS range
+(min 256, size 272), a free slot at absolute index 256 + n marked bit
+256 + n in the mask but returned n, colliding with regular WTBL
+entries, and the relative bound check allowed scanning far beyond the
+requested range.
+
+Keep the word offset in the loop index instead of shifting the mask
+pointer, so marking, return value and bound check all use absolute
+indices.
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit 8e1889a5ba7ea6c2ea5bc48f057a90f506a64294)
+---
+ util.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/util.c b/util.c
+index 8e927dc3..505b69c0 100644
+--- a/util.c
++++ b/util.c
+@@ -45,14 +45,12 @@ EXPORT_SYMBOL_GPL(____mt76_poll_msec);
+ int __mt76_wcid_alloc(u32 *mask, int min, int size)
+ {
+ 	u32 min_mask = ~0;
+-	int i, idx = 0, cur;
++	int i, idx, cur;
+ 
+-	mask += min / 32;
+-	min %= 32;
+-	if (min > 0)
+-		min_mask = ~((1 << min) - 1);
++	if (min % 32)
++		min_mask = ~((1 << (min % 32)) - 1);
+ 
+-	for (i = 0; i < DIV_ROUND_UP(size, 32); i++) {
++	for (i = min / 32; i < DIV_ROUND_UP(size, 32); i++) {
+ 		idx = ffs(~mask[i] & min_mask);
+ 		min_mask = ~0;
+ 		if (!idx)

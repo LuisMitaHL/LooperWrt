@@ -1,7 +1,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mt76
-PKG_RELEASE=2
+PKG_RELEASE=5
+
+# MT7981 firmware is carried in files/firmware: mt76 master updates
+# mt7981_wm/wa/rom_patch to version 20260515 (upstream commit 2dd6e4c), but
+# PKG_SOURCE_VERSION cannot move past 2026-03-19 because newer mt76 needs
+# mac80211 7.x. Installed by KernelPackage/mt7981-firmware/install.
 
 PKG_LICENSE:=BSD-3-Clause-Clear
 PKG_LICENSE_FILES:=
@@ -627,9 +632,9 @@ endef
 define KernelPackage/mt7981-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/mediatek
 	cp \
-		$(PKG_BUILD_DIR)/firmware/mt7981_wa.bin \
-		$(PKG_BUILD_DIR)/firmware/mt7981_wm.bin \
-		$(PKG_BUILD_DIR)/firmware/mt7981_rom_patch.bin \
+		$(CURDIR)/files/firmware/mt7981_wa.bin \
+		$(CURDIR)/files/firmware/mt7981_wm.bin \
+		$(CURDIR)/files/firmware/mt7981_rom_patch.bin \
 		$(1)/lib/firmware/mediatek
 endef
 

@@ -1,0 +1,46 @@
+From a112aaf6c3d9779c453126cbbb3c4400bf3c7610 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Thu, 2 Jul 2026 15:54:05 +0000
+Subject: [PATCH 41/64] wifi: mt76: fix ER-SU 106-tone RU check in RX rate
+ decode
+
+MT_PHY_TYPE_HE_EXT_SU is an enum value (9), not a bit flag, so the
+bitwise test "*mode & MT_PHY_TYPE_HE_EXT_SU" also matches OFDM, HT-GF and
+several HE/EHT modes. Only genuine ER-SU should be classified as a
+106-tone RU at 40 MHz; use an equality comparison.
+
+Fixes: 98686cd21624 ("wifi: mt76: mt7996: add driver for MediaTek Wi-Fi 7 (802.11be) devices")
+Fixes: d832f5e73815 ("mt76: connac: move mt76_connac2_mac_fill_rx_rate in connac module")
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit f012f82a81712e356a7d6e56953300914587feaa)
+---
+ mt76_connac_mac.c | 2 +-
+ mt7996/mac.c      | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/mt76_connac_mac.c b/mt76_connac_mac.c
+index ad539b22..bc5575f6 100644
+--- a/mt76_connac_mac.c
++++ b/mt76_connac_mac.c
+@@ -1105,7 +1105,7 @@ int mt76_connac2_mac_fill_rx_rate(struct mt76_dev *dev,
+ 	case IEEE80211_STA_RX_BW_20:
+ 		break;
+ 	case IEEE80211_STA_RX_BW_40:
+-		if (*mode & MT_PHY_TYPE_HE_EXT_SU &&
++		if (*mode == MT_PHY_TYPE_HE_EXT_SU &&
+ 		    (idx & MT_PRXV_TX_ER_SU_106T)) {
+ 			status->bw = RATE_INFO_BW_HE_RU;
+ 			status->he_ru =
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+index f7694faf..6eed458b 100644
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -349,7 +349,7 @@ mt7996_mac_fill_rx_rate(struct mt7996_dev *dev,
+ 	case IEEE80211_STA_RX_BW_20:
+ 		break;
+ 	case IEEE80211_STA_RX_BW_40:
+-		if (*mode & MT_PHY_TYPE_HE_EXT_SU &&
++		if (*mode == MT_PHY_TYPE_HE_EXT_SU &&
+ 		    (idx & MT_PRXV_TX_ER_SU_106T)) {
+ 			status->bw = RATE_INFO_BW_HE_RU;
+ 			status->he_ru =
