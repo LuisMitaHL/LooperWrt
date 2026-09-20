@@ -1,0 +1,50 @@
+From 9b925b4f2de1ff75db245304492b4fcf8f16ea10 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Thu, 2 Jul 2026 15:59:19 +0000
+Subject: [PATCH 43/64] wifi: mt76: report data NSS for STBC frames in RX rate
+ decode
+
+The RX rate decoder set status->nss straight from the PRXV NSTS field,
+which for STBC frames is twice the data spatial-stream count. cfg80211
+then reported a doubled RX bitrate in station dumps and radiotap. Halve
+nss for STBC, matching the TX status path.
+
+Fixes: 98686cd21624 ("wifi: mt76: mt7996: add driver for MediaTek Wi-Fi 7 (802.11be) devices")
+Fixes: d832f5e73815 ("mt76: connac: move mt76_connac2_mac_fill_rx_rate in connac module")
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit 10a1541fb264831d717125ef32b16901f0fe0cec)
+---
+ mt76_connac_mac.c | 4 ++++
+ mt7996/mac.c      | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/mt76_connac_mac.c b/mt76_connac_mac.c
+index bc5575f6..e2effe81 100644
+--- a/mt76_connac_mac.c
++++ b/mt76_connac_mac.c
+@@ -1060,6 +1060,10 @@ int mt76_connac2_mac_fill_rx_rate(struct mt76_dev *dev,
+ 		bw = FIELD_GET(MT_CRXV_FRAME_MODE, v2);
+ 	}
+ 
++	/* the hardware reports NSTS; report the data NSS for STBC frames */
++	if (stbc && nss > 1)
++		nss >>= 1;
++
+ 	switch (*mode) {
+ 	case MT_PHY_TYPE_CCK:
+ 		cck = true;
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+index 6eed458b..a59e14f4 100644
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -294,6 +294,10 @@ mt7996_mac_fill_rx_rate(struct mt7996_dev *dev,
+ 	dcm = FIELD_GET(MT_PRXV_DCM, v2);
+ 	bw = FIELD_GET(MT_PRXV_FRAME_MODE, v2);
+ 
++	/* the hardware reports NSTS; report the data NSS for STBC frames */
++	if (stbc && nss > 1)
++		nss >>= 1;
++
+ 	switch (*mode) {
+ 	case MT_PHY_TYPE_CCK:
+ 		cck = true;

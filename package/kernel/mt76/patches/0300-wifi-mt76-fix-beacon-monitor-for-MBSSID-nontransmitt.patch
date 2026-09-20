@@ -1,0 +1,42 @@
+From 4943ab0479ac9ebdebade129c406933f7b73eaa9 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Sat, 21 Mar 2026 04:11:28 +0000
+Subject: [PATCH 01/64] wifi: mt76: fix beacon monitor for MBSSID
+ nontransmitted BSS
+
+When associated with a nontransmitted BSS in an MBSSID set, the beacon
+frame's BSSID (addr3) contains the transmitting AP's BSSID, not the
+station's associated BSSID. The beacon matching in mt76_rx_beacon_iter()
+only compared against link_conf->bssid, so beacons were never matched,
+causing false beacon loss reports.
+
+Add a fallback check against link_conf->transmitter_bssid when
+link_conf->nontransmitted is set, mirroring mac80211's
+ieee80211_rx_our_beacon() logic.
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit a665659dee50fe25bce79a1f71ff8a0e7cd92218)
+---
+ mac80211.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/mac80211.c b/mac80211.c
+index 084d9ccb..dd68776a 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -2274,8 +2274,13 @@ static void mt76_rx_beacon_iter(void *_data, u8 *mac,
+ 			continue;
+ 
+ 		link_conf = rcu_dereference(vif->link_conf[link_id]);
+-		if (!link_conf ||
+-		    !ether_addr_equal(link_conf->bssid, data->bssid))
++		if (!link_conf)
++			continue;
++
++		if (!ether_addr_equal(link_conf->bssid, data->bssid) &&
++		    (!link_conf->nontransmitted ||
++		     !ether_addr_equal(link_conf->transmitter_bssid,
++				       data->bssid)))
+ 			continue;
+ 
+ 		WRITE_ONCE(mlink->beacon_mon_last, jiffies);

@@ -1,0 +1,47 @@
+From 0d3207f4a3045ac66e55fbf1b79bbab969dc1744 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Thu, 2 Jul 2026 15:53:08 +0000
+Subject: [PATCH 40/64] wifi: mt76: decode the full VHT Rx STBC capability
+ field
+
+The Rx STBC subfield of the VHT capabilities is a 3-bit cumulative value,
+but the driver only tested the RXSTBC_1 bit when advertising the peer's
+Rx STBC support to firmware. A peer reporting Rx STBC of 2, 3 or 4 has
+that bit clear, so STBC was never used towards it. Test the full
+IEEE80211_VHT_CAP_RXSTBC_MASK, matching the HT path.
+
+Fixes: 046d2e7c50e3 ("mac80211: prepare sta handling for MLO support")
+Fixes: 2660fde82f65 ("wifi: mt76: mt7996: Update mt7996_mcu_add_rate_ctrl to MLO")
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit 41cecc382be91ec0d105c111097e6b238f84336f)
+---
+ mt7915/mcu.c | 2 +-
+ mt7996/mcu.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/mt7915/mcu.c b/mt7915/mcu.c
+index 796aa885..729caa56 100644
+--- a/mt7915/mcu.c
++++ b/mt7915/mcu.c
+@@ -1628,7 +1628,7 @@ mt7915_mcu_sta_rate_ctrl_tlv(struct sk_buff *skb, struct mt7915_dev *dev,
+ 			cap |= STA_CAP_VHT_SGI_160;
+ 		if (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_TXSTBC)
+ 			cap |= STA_CAP_VHT_TX_STBC;
+-		if (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_1)
++		if (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_MASK)
+ 			cap |= STA_CAP_VHT_RX_STBC;
+ 		if (mvif->cap.vht_ldpc &&
+ 		    (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_RXLDPC))
+diff --git a/mt7996/mcu.c b/mt7996/mcu.c
+index d664767f..402c3f7f 100644
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -2467,7 +2467,7 @@ mt7996_mcu_sta_rate_ctrl_tlv(struct sk_buff *skb, struct mt7996_dev *dev,
+ 			cap |= STA_CAP_VHT_SGI_160;
+ 		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_TXSTBC)
+ 			cap |= STA_CAP_VHT_TX_STBC;
+-		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_1)
++		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_MASK)
+ 			cap |= STA_CAP_VHT_RX_STBC;
+ 		if ((vif->type != NL80211_IFTYPE_AP || link_conf->vht_ldpc) &&
+ 		    (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXLDPC))

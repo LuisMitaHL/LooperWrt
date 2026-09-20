@@ -1,0 +1,43 @@
+From 46bb14d5e6dff935f01f5b01fe366722c756e67c Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Sat, 1 Aug 2026 14:53:32 +0000
+Subject: [PATCH 5/5] wifi: mt76: mt7603: file buffered frames under the TID
+ reported to mac80211
+
+The PS queue filed redirected frames under the TID taken from the TXD,
+while mac80211 was told about the TID taken from the QoS header, or TID 0
+for anything that is not a QoS data frame. When the two disagree,
+mt7603_release_buffered_frames() skips the frame because it does not
+match the requested TIDs, so it stays in the PS queue until the station
+wakes up. Buffered MMPDUs hit this whenever they were sent on a
+non-zero TID.
+
+Use one TID for both.
+
+Link: https://patch.msgid.link/20260801145334.1166751-8-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit 5504bac46a38d143e413a0362a4dfa46b66b5baf)
+---
+ mt7603/dma.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/mt7603/dma.c b/mt7603/dma.c
+index 3a168515..477a9b7a 100644
+--- a/mt7603/dma.c
++++ b/mt7603/dma.c
+@@ -39,7 +39,6 @@ mt7603_rx_loopback_skb(struct mt7603_dev *dev, struct sk_buff *skb)
+ 
+ 	val = le32_to_cpu(txd[1]);
+ 	idx = FIELD_GET(MT_TXD1_WLAN_IDX, val);
+-	skb->priority = FIELD_GET(MT_TXD1_TID, val);
+ 
+ 	if (idx >= MT7603_WTBL_STA - 1)
+ 		goto free;
+@@ -72,6 +71,7 @@ mt7603_rx_loopback_skb(struct mt7603_dev *dev, struct sk_buff *skb)
+ 		hwq = MT_TX_HW_QUEUE_MGMT;
+ 	}
+ 
++	skb->priority = tid;
+ 	ieee80211_sta_set_buffered(sta, tid, true);
+ 
+ 	val = le32_to_cpu(txd[0]);

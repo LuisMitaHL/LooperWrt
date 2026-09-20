@@ -1,0 +1,40 @@
+From 4142ef5e36bb5423fde19b9ee319e1fa2177686c Mon Sep 17 00:00:00 2001
+From: Devin Wittmayer <lucid_duck@justthetip.ca>
+Date: Fri, 12 Jun 2026 17:25:44 -0700
+Subject: [PATCH 15/64] wifi: mt76: mt76x02: report rx FCS errors to mac80211
+
+When the fcsfail filter is enabled the hardware passes frames with a bad
+FCS up to the driver, but mt76x02_mac_process_rx() never checks
+MT_RXINFO_CRCERR and hands them to mac80211 without
+RX_FLAG_FAILED_FCS_CRC. In monitor mode the radiotap flags byte then
+never gets IEEE80211_RADIOTAP_F_BADFCS set and corrupted frames cannot be
+told apart from clean ones.
+
+Set RX_FLAG_FAILED_FCS_CRC from the descriptor CRC error bit, matching
+mt7603, mt7615, mt7915, mt7921, mt7925 and mt7996.
+
+Reported-by: 0072a70 <90307219+0072a70@users.noreply.github.com>
+Closes: https://github.com/morrownr/mt76/issues/38
+Tested-by: 0072a70 <90307219+0072a70@users.noreply.github.com>
+Signed-off-by: Devin Wittmayer <lucid_duck@justthetip.ca>
+Link: https://patch.msgid.link/20260613002544.27750-3-lucid_duck@justthetip.ca
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+(cherry picked from commit f5dc4270d268d4ab02479296bc5b0635da72f6e6)
+---
+ mt76x02_mac.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/mt76x02_mac.c b/mt76x02_mac.c
+index aa525adb..21f8b1e6 100644
+--- a/mt76x02_mac.c
++++ b/mt76x02_mac.c
+@@ -792,6 +792,9 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
+ 	if (rxinfo & MT_RXINFO_L2PAD)
+ 		pad_len += 2;
+ 
++	if (rxinfo & MT_RXINFO_CRCERR)
++		status->flag |= RX_FLAG_FAILED_FCS_CRC;
++
+ 	if (rxinfo & MT_RXINFO_DECRYPT) {
+ 		status->flag |= RX_FLAG_DECRYPTED;
+ 		status->flag |= RX_FLAG_MMIC_STRIPPED;
