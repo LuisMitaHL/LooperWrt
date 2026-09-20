@@ -1,0 +1,23 @@
+wireless-regdb: update country BO (Bolivia) rules
+
+Raise the 2.4 GHz EIRP limit to 30 dBm and enable the 5 GHz bands
+(5150-5250, 5250-5330, 5470-5730 and 5735-5835) at 30 dBm, with
+AUTO-BW on the 80 MHz ranges.
+
+Signed-off-by: Luis Mita <luis@luismita.com>
+---
+--- a/db.txt
++++ b/db.txt
+@@ -342,8 +342,10 @@
+ 	(57000 - 66000 @ 2160), (10000 mW), NO-OUTDOOR
+ 
+ country BO: DFS-JP
+-	(2402 - 2482 @ 40), (20)
+-	(5250 - 5330 @ 80), (30), DFS
++	(2402 - 2482 @ 40), (30)
++	(5170 - 5250 @ 80), (30), AUTO-BW
++	(5250 - 5330 @ 80), (30), AUTO-BW
++	(5490 - 5730 @ 160), (30)
+ 	(5735 - 5835 @ 80), (30)
+ 
+ # Source:
