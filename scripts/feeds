@@ -442,6 +442,7 @@ sub do_install_src($$) {
 	my $path = $src->{makefile};
 	if ($path) {
 		$path =~ s/\/Makefile$//;
+		$path =~ s/\/\.$//;
 
 		-d "./package/feeds" or mkdir "./package/feeds";
 		-d "./package/feeds/$feed->[1]" or mkdir "./package/feeds/$feed->[1]";
@@ -460,6 +461,7 @@ sub do_install_target($) {
 
 	if ($path) {
 		$path =~ s/\/Makefile$//;
+		$path =~ s/\/\.$//;
 		my $name = $path;
 		$name =~ s/.*\///;
 		my $dest = "./target/linux/feeds/$name";
