@@ -100,6 +100,7 @@ case "$(board_name)" in
 		uci -q set firewall.mesh.input='ACCEPT'
 		uci -q set firewall.mesh.output='ACCEPT'
 		uci -q set firewall.mesh.forward='ACCEPT'
+		uci -q set firewall.mesh.mtu_fix='1'
 		uci -q add_list firewall.mesh.network='tailscale'
 		uci -q add firewall forwarding
 		uci -q set firewall.@forwarding[-1].src='mesh'
