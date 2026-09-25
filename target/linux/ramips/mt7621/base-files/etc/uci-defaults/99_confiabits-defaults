@@ -13,7 +13,24 @@ case "$(board_name)" in
 		# Builds before the marker existed lacked it. Detect already
 		# applied defaults by their own fingerprint so upgrading from
 		# those builds does not clobber user config either.
-		uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && exit 0
+		_hostname=$(uci -q get system.@system[0].hostname)
+		uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && _hostname='LaOtraRed'
+		[ "$_hostname" = 'LaOtraRed' ] && exit 0
+
+		uci -q set system.@system[0].hostname='LaOtraRed'
+		uci -q set system.@system[0].zonename='America/La_Paz'
+		uci -q set system.@system[0].timezone='<-04>4'
+		uci -q set system.@system[0].log_size='1024'
+		uci -q commit system
+		uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
+		uci -q commit dhcp
+		uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
+		uci -q commit luci
+		uci -q set footstrap.settings.layout='sidebar'
+		uci -q set footstrap.settings.palette='hicontrast'
+		uci -q commit footstrap
+		uci -q set uhttpd.main.redirect_https='1'
+		uci -q commit uhttpd
 
 		# Enable wifi by default with a per-device SSID.
 		# SSID is LOR_<last 3 label-MAC octets, upper case>
