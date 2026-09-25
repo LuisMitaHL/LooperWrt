@@ -1,0 +1,43 @@
+#!/bin/sh
+# Fleet identity defaults -- the SINGLE source for every board built from
+# this branch (spec 006-fleet-identity-defaults). Per-device 99_* files
+# must not carry these settings; build-firmware.sh's
+# verify_identity_defaults() enforces that on every build.
+#
+# The 99_000- prefix makes this run BEFORE the per-device 99_* files
+# (uci-defaults run lexically): the device guards' LOR_ fingerprint must
+# see a fresh system on first boot, and the device files no longer carry
+# a hostname fingerprint for the same reason.
+#
+# Apply-once: skip when any fingerprint holds -- the marker, the fleet
+# hostname, or a LooperWrt SSID (builds from before the marker) -- so
+# upgrades and user renames are never clobbered.
+. /lib/functions.sh
+
+if uci -q get looperwrt.identity_defaults.applied >/dev/null; then
+	exit 0
+fi
+[ "$(uci -q get system.@system[0].hostname)" = 'LaOtraRed' ] && exit 0
+uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && exit 0
+
+uci -q set system.@system[0].hostname='LaOtraRed'
+uci -q set system.@system[0].zonename='America/La_Paz'
+uci -q set system.@system[0].timezone='<-04>4'
+uci -q set system.@system[0].log_size='1024'
+uci -q commit system
+uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
+uci -q commit dhcp
+uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
+uci -q commit luci
+uci -q set footstrap.settings.layout='sidebar'
+uci -q set footstrap.settings.palette='hicontrast'
+uci -q commit footstrap
+uci -q set uhttpd.main.redirect_https='1'
+uci -q commit uhttpd
+
+touch /etc/config/looperwrt
+uci -q set looperwrt.identity_defaults=defaults
+uci -q set looperwrt.identity_defaults.applied='1'
+uci -q commit looperwrt
+
+exit 0

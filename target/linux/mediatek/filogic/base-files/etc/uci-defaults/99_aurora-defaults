@@ -13,24 +13,13 @@ case "$(board_name)" in
 		# Builds before the marker existed lacked it. Detect already
 		# applied defaults by their own fingerprint so upgrading from
 		# those builds does not clobber user config either.
-		_hostname=$(uci -q get system.@system[0].hostname)
-		uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && _hostname='LaOtraRed'
-		[ "$_hostname" = 'LaOtraRed' ] && exit 0
-
-		uci -q set system.@system[0].hostname='LaOtraRed'
-		uci -q set system.@system[0].zonename='America/La_Paz'
-		uci -q set system.@system[0].timezone='<-04>4'
-		uci -q set system.@system[0].log_size='1024'
-		uci -q commit system
-		uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
-		uci -q commit dhcp
-		uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
-		uci -q commit luci
-		uci -q set footstrap.settings.layout='sidebar'
-		uci -q set footstrap.settings.palette='hicontrast'
-		uci -q commit footstrap
-		uci -q set uhttpd.main.redirect_https='1'
-		uci -q commit uhttpd
+		# (The fleet identity -- hostname/zone/theme/... -- lives in the
+		# single shared source package/base-files/files/etc/uci-defaults/
+		# 99_000-looperwrt-identity, spec 006; it runs before this file
+		# and must not be duplicated here. The hostname fingerprint was
+		# removed from this guard: the shared source sets the hostname
+		# first on a fresh boot and would false-trigger it.)
+		uci -q show wireless 2>/dev/null | grep -q "\.ssid='LOR_" && exit 0
 
 		# Enable wifi by default with a per-device SSID.
 		# SSID is LOR_<last 3 label-MAC octets, upper case>
