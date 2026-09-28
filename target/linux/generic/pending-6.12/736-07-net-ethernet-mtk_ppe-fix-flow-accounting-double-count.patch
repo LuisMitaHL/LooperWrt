@@ -1,0 +1,81 @@
+From: Luis Mita <luis@luismita.com>
+Date: Mon, 28 Sep 2026 18:00:00 +0000
+Subject: [PATCH] net: ethernet: mediatek: fix PPE flow accounting double count
+
+mtk_flow_entry_update() folds the per-slot MIB accumulator into the
+flow's banked totals (prev_packets/prev_bytes) once the FOE entry is no
+longer in BIND state, but it adds the same accumulator to the caller's
+snapshot on every call.  mtk_foe_entry_get_stats() re-initialises that
+snapshot from the banked totals on each query, so from the second query
+after the slot left BIND onwards the reported delta is the entire
+lifetime packet/byte count again.
+
+netfilter consumes these deltas with nf_ct_acct_add(), so a sparse
+one-way flow whose flowtable entry outlives its PPE slot inflates the
+conntrack counters by one full counter value per stats query.  Observed
+as ~30x inflation over the ~30s between the slot ageing out and the
+flow being torn down:
+
+  ipv4 2 udp 17 ... packets=150000 ...    (BIND)
+  ipv4 2 udp 17 ... packets=1049730 ...   (slot gone, +1x)
+  ipv4 2 udp 17 ... packets=2549280 ...   (+1x)
+  ipv4 2 udp 17 ... packets=4048830 ...   (+1x)
+  ipv4 2 udp 17 ... packets=4498695 ...   (+1x, then teardown)
+
+Fold the accumulator into the snapshot exactly once and consume it so
+that later queries report no further traffic.  This also stops a FOE
+slot that is reused before its next bind from exposing the previous
+flow's counters through the debugfs interface.
+
+Fixes: aa2777145f8d ("kernel: improve mtk ppe flow accounting")
+Signed-off-by: Luis Mita <luis@luismita.com>
+---
+
+diff --git a/drivers/net/ethernet/mediatek/mtk_ppe.c b/drivers/net/ethernet/mediatek/mtk_ppe.c
+--- a/drivers/net/ethernet/mediatek/mtk_ppe.c
++++ b/drivers/net/ethernet/mediatek/mtk_ppe.c
+@@ -718,7 +718,6 @@
+ 	struct mtk_foe_entry foe = {};
+ 	struct mtk_foe_entry *hwe;
+ 	u16 hash = entry->hash;
+-	bool ret = false;
+ 	int len;
+ 
+ 	if (hash == 0xffff)
+@@ -732,24 +731,31 @@
+ 	    FIELD_GET(MTK_FOE_IB1_STATE, foe.ib1) != MTK_FOE_STATE_BIND) {
+ 		acct = mtk_ppe_acct_data(ppe, hash);
+ 		if (acct) {
++			/*
++			 * The slot is no longer bound. Fold its final
++			 * counters into the flow's banked totals and
++			 * consume the accumulator, so that repeated
++			 * stats queries do not account for it again.
++			 */
+ 			entry->prev_packets += acct->packets;
+ 			entry->prev_bytes += acct->bytes;
++			*packets += acct->packets;
++			*bytes += acct->bytes;
++			acct->packets = 0;
++			acct->bytes = 0;
+ 		}
+ 
+-		goto out;
++		return false;
+ 	}
+ 
+ 	entry->data.ib1 = foe.ib1;
+ 	acct = mtk_ppe_mib_entry_read(ppe, hash);
+-	ret = true;
+-
+-out:
+ 	if (acct) {
+ 		*packets += acct->packets;
+ 		*bytes += acct->bytes;
+ 	}
+ 
+-	return ret;
++	return true;
+ }
+ 
+ static void
