@@ -1,0 +1,65 @@
+From: Luis Mita <luis@luismita.com>
+Date: Mon, 28 Sep 2026 20:30:00 +0000
+Subject: [PATCH] net: ethernet: mediatek: restrict PPE cache preserved-line lock
+ to netsys v2+
+
+The preserved-line lock added by the MediaTek PPE cache rework only
+works on netsys v2 and later.  On v1 (e.g. MT7621) the
+MTK_PPE_CACHE_DBG idle poll never reports idle, so
+mtk_ppe_cache_clear() bails out before invalidating the cache.  With
+the commit-time flush also removed, the PPE cache is then never
+invalidated on v1 and stale bound entries keep being forwarded:
+
+  mtk_ppe_cache_clear: ppe cache idle check timeout!
+
+Keep the plain MTK_PPE_CACHE_CTL_CLEAR invalidation (and the commit-time
+flush) for v1, and use the preserved-line lock only on v2+.
+
+Signed-off-by: Luis Mita <luis@luismita.com>
+---
+
+diff --git a/drivers/net/ethernet/mediatek/mtk_ppe.c b/drivers/net/ethernet/mediatek/mtk_ppe.c
+--- a/drivers/net/ethernet/mediatek/mtk_ppe.c
++++ b/drivers/net/ethernet/mediatek/mtk_ppe.c
+@@ -237,6 +237,17 @@
+ 	u32 cah_en, flow_cfg, scan_mode;
+ 	u32 i, idle, retry;
+ 
++	/*
++	 * The preserved-line lock is only implemented on netsys v2 and
++	 * later.  On v1 the idle poll on MTK_PPE_CACHE_DBG never
++	 * succeeds, so fall back to the plain cache invalidation.
++	 */
++	if (!mtk_is_netsys_v2_or_greater(ppe->eth)) {
++		ppe_set(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CLEAR);
++		ppe_clear(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CLEAR);
++		return;
++	}
++
+ 	spin_lock_bh(&ppe->cache_lock);
+ 
+ 	/* disable table learning */
+@@ -685,7 +696,8 @@
+ 		hwe->ib1 &= ~MTK_FOE_IB1_STATE;
+ 		hwe->ib1 |= FIELD_PREP(MTK_FOE_IB1_STATE, MTK_FOE_STATE_INVALID);
+ 		dma_wmb();
+-		if (state == MTK_FOE_STATE_BIND)
++		if (!mtk_is_netsys_v2_or_greater(ppe->eth) ||
++		    state == MTK_FOE_STATE_BIND)
+ 			mtk_ppe_cache_clear(ppe);
+ 	}
+ 	entry->hash = 0xffff;
+@@ -847,6 +859,13 @@
+ 		acct->packets = 0;
+ 		acct->bytes = 0;
+ 	}
++
++	/*
++	 * netsys v1 has no preserved-line lock, so flush the cache after
++	 * programming an entry, as before.
++	 */
++	if (!mtk_is_netsys_v2_or_greater(eth))
++		mtk_ppe_cache_clear(ppe);
+ }
+ 
+ void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
