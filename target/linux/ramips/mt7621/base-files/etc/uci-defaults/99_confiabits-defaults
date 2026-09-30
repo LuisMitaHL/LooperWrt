@@ -1,8 +1,12 @@
 . /lib/functions.sh
 . /lib/functions/system.sh
 
+# LooperWrt router defaults, applied once per fresh flash. Shared by every
+# LooperWrt MT7621 board: Confiabits MT7621 v1 and MikroTik RouterBOARD
+# 750Gr3 (hEX). The wifi block below is a no-op on the wired-only RB750Gr3.
 case "$(board_name)" in
-	confiabits,mt7621-v1)
+	confiabits,mt7621-v1|\
+	mikrotik,routerboard-750gr3)
 		# uci-defaults re-run on the first boot after every flash,
 		# including a sysupgrade that keeps the settings. Apply the
 		# LooperWrt defaults only on top of a fresh (stock OpenWrt)
