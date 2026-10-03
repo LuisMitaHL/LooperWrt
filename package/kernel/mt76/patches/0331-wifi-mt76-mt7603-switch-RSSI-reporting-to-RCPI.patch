@@ -1,0 +1,101 @@
+From 2a51c49cb38803a5b2cdad07e4ae9b32b7cd277c Mon Sep 17 00:00:00 2001
+From: Oleh Shcherba <scherbaoleg4@gmail.com>
+Date: Fri, 18 Sep 2026 19:40:53 +0300
+Subject: [PATCH] wifi: mt76: mt7603: switch RSSI reporting to RCPI
+
+IBRssi reflects post-LNA baseband energy without AGC gain compensation.
+When a client device is near the router, LNA gain state transitions
+cause uncompensated IBRssi readings to fluctuate wildly by 15-20 dB.
+
+RCPI (Received Channel Power Indicator, defined in 802.11k) is
+calculated directly by hardware baseband with full AGC/LNA compensation.
+Formula: dBm = (RCPI - 220) / 2.
+
+Switching to RCPI stabilizes RSSI reporting across AGC state switches.
+
+Since RCPI is already fully hardware-compensated, the per-channel
+rssi_offset calibration data read from EEPROM in mt7603_set_channel()
+is no longer needed. Remove the EEPROM read, the memcpy into
+dev->rssi_offset, and the now-unused rssi_offset field from
+struct mt7603_dev, along with the rssi_data pointer that only
+existed to feed that memcpy.
+
+rxdg3 (RXV4) is only read by the code this patch replaces, so its
+declaration is dropped instead of being left alongside rxdg2, to
+avoid an unused-variable warning.
+
+Signed-off-by: Oleh Shcherba <scherbaoleg4@gmail.com>
+---
+ mt7603/mac.c    |  8 +++-----
+ mt7603/main.c   | 10 ++--------
+ mt7603/mt7603.h |  1 -
+ 3 files changed, 5 insertions(+), 14 deletions(-)
+
+diff --git a/mt7603/mac.c b/mt7603/mac.c
+index fa0bf9a20..e39734f90 100644
+--- a/mt7603/mac.c
++++ b/mt7603/mac.c
+@@ -643,7 +643,7 @@ mt7603_mac_fill_rx(struct mt7603_dev *dev, struct sk_buff *skb)
+ 	}
+ 	if (rxd0 & MT_RXD0_NORMAL_GROUP_3) {
+ 		u32 rxdg0 = le32_to_cpu(rxd[0]);
+-		u32 rxdg3 = le32_to_cpu(rxd[3]);
++		u32 rxdg2 = le32_to_cpu(rxd[2]);
+ 		bool cck = false;
+ 
+ 		i = FIELD_GET(MT_RXV1_TX_RATE, rxdg0);
+@@ -675,10 +675,8 @@ mt7603_mac_fill_rx(struct mt7603_dev *dev, struct sk_buff *skb)
+ 		status->rate_idx = i;
+ 
+ 		status->chains = dev->mphy.antenna_mask;
+-		status->chain_signal[0] = FIELD_GET(MT_RXV4_IB_RSSI0, rxdg3) +
+-					  dev->rssi_offset[0];
+-		status->chain_signal[1] = FIELD_GET(MT_RXV4_IB_RSSI1, rxdg3) +
+-					  dev->rssi_offset[1];
++		status->chain_signal[0] = ((s16)FIELD_GET(MT_RXV3_RCPI0, rxdg2) - 220) / 2;
++		status->chain_signal[1] = ((s16)FIELD_GET(MT_RXV3_RCPI1, rxdg2) - 220) / 2;
+ 
+ 		if (FIELD_GET(MT_RXV1_FRAME_MODE, rxdg0) == 1)
+ 			status->bw = RATE_INFO_BW_40;
+diff --git a/mt7603/main.c b/mt7603/main.c
+index 757664e9e..45d130e54 100644
+--- a/mt7603/main.c
++++ b/mt7603/main.c
+@@ -136,7 +136,6 @@ int mt7603_set_channel(struct mt76_phy *mphy)
+ 	struct mt7603_dev *dev = container_of(mphy->dev, struct mt7603_dev, mt76);
+ 	struct cfg80211_chan_def *def = &mphy->chandef;
+ 
+-	u8 *rssi_data = (u8 *)dev->mt76.eeprom.data;
+ 	int idx, ret;
+ 	u8 bw = MT_BW_20;
+ 	bool failed = false;
+@@ -156,15 +155,10 @@ int mt7603_set_channel(struct mt76_phy *mphy)
+ 		goto out;
+ 	}
+ 
+-	if (def->chan->band == NL80211_BAND_5GHZ) {
++	if (def->chan->band == NL80211_BAND_5GHZ)
+ 		idx = 1;
+-		rssi_data += MT_EE_RSSI_OFFSET_5G;
+-	} else {
++	else
+ 		idx = 0;
+-		rssi_data += MT_EE_RSSI_OFFSET_2G;
+-	}
+-
+-	memcpy(dev->rssi_offset, rssi_data, sizeof(dev->rssi_offset));
+ 
+ 	idx |= (def->chan -
+ 		mt76_hw(dev)->wiphy->bands[def->chan->band]->channels) << 1;
+diff --git a/mt7603/mt7603.h b/mt7603/mt7603.h
+index 5b0ecd01a..177896085 100644
+--- a/mt7603/mt7603.h
++++ b/mt7603/mt7603.h
+@@ -118,7 +118,6 @@ struct mt7603_dev {
+ 
+ 	u32 ampdu_ref;
+ 	u32 rx_ampdu_ts;
+-	u8 rssi_offset[3];
+ 
+ 	u8 slottime;
+ 	s16 coverage_class;
