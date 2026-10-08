@@ -1,0 +1,33 @@
+commit 17bfd775f4830eb6811a36a20c53aef37781e480
+Author: Jiale Yao <yaojiale02@163.com>
+Date:   Sun Sep 27 18:10:40 2026 +0800
+
+    wifi: mt76: mt7615: cancel reset work during unregister
+    
+    The MCU error interrupt handler queues reset_work on the device workqueue.
+    Device removal can reach mt76_unregister_device() while that work is still
+    pending, since the workqueue is not destroyed until mt76_free_device().
+    
+    If reset_work runs in this window, it operates on an unregistered hw and
+    can requeue mac_work after ieee80211_unregister_hw() has torn the device
+    down. Cancel it before unregistering the device so it cannot outlive the
+    registered hw.
+    
+    Fixes: 61c4fa721968 ("mt76: mt7615: implement hardware reset support")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Jiale Yao <yaojiale02@163.com>
+    Link: https://patch.msgid.link/20260927101041.957362-1-yaojiale02@163.com
+    Signed-off-by: Felix Fietkau <nbd@nbd.name>
+
+diff --git a/mt7615/pci_init.c b/mt7615/pci_init.c
+index a9178e07..7d858072 100644
+--- a/mt7615/pci_init.c
++++ b/mt7615/pci_init.c
+@@ -116,6 +116,7 @@ void mt7615_unregister_device(struct mt7615_dev *dev)
+ 	mcu_running = mt7615_wait_for_mcu_init(dev);
+ 
+ 	mt7615_unregister_ext_phy(dev);
++	cancel_work_sync(&dev->reset_work);
+ 	mt76_unregister_device(&dev->mt76);
+ 	if (mcu_running)
+ 		mt7615_mcu_exit(dev);
