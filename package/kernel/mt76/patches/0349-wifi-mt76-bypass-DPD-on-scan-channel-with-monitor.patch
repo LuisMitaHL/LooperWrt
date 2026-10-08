@@ -1,0 +1,51 @@
+commit 467ae2e3f190baf737e15e318906da0dc7d0ab91
+Author: Felix Fietkau <nbd@nbd.name>
+Date:   Thu Oct 8 09:44:25 2026 +0200
+
+    wifi: mt76: bypass DPD on a scan channel while a monitor is active
+    
+    Commit "mt76: fix monitor rx FCS error in DFS channel" set
+    CH_SWITCH_NORMAL for every channel switch while a monitor interface is
+    active, to keep CH_SWITCH_DFS away from a monitored DFS channel. The
+    monitor check comes before the offchannel check, so a scan channel also
+    gets CH_SWITCH_NORMAL instead of CH_SWITCH_SCAN_BYPASS_DPD, and the
+    firmware runs the full calibration on each scan channel.
+    
+    On an MT7981 with a monitor on the 5 GHz phy, a scan on that phy took
+    10.8 to 11.0 s instead of 2.9 to 3.1 s. hostapd aborts its first scan
+    after 10 s, so ACS never completes a scan there.
+    
+    Apply the monitor rule only on the operating channel.
+    
+    Fixes: 24e69f6bc3ca ("mt76: fix monitor rx FCS error in DFS channel")
+    Link: https://patch.msgid.link/20261008074425.2717811-1-nbd@nbd.name
+    Signed-off-by: Felix Fietkau <nbd@nbd.name>
+
+diff --git a/mt7615/mcu.c b/mt7615/mcu.c
+index aab4303f..152b7517 100644
+--- a/mt7615/mcu.c
++++ b/mt7615/mcu.c
+@@ -2156,7 +2156,8 @@ int mt7615_mcu_set_chan_info(struct mt7615_phy *phy, int cmd)
+ 	};
+ 
+ 	if (cmd == MCU_EXT_CMD(SET_RX_PATH) ||
+-	    phy->mt76->hw->conf.flags & IEEE80211_CONF_MONITOR)
++	    (phy->mt76->hw->conf.flags & IEEE80211_CONF_MONITOR &&
++	     !phy->mt76->offchannel))
+ 		req.switch_reason = CH_SWITCH_NORMAL;
+ 	else if (phy->mt76->offchannel)
+ 		req.switch_reason = CH_SWITCH_SCAN_BYPASS_DPD;
+diff --git a/mt7915/mcu.c b/mt7915/mcu.c
+index 12356621..1d845cfe 100644
+--- a/mt7915/mcu.c
++++ b/mt7915/mcu.c
+@@ -2855,7 +2855,8 @@ int mt7915_mcu_set_chan_info(struct mt7915_phy *phy, int cmd)
+ 	if (mt76_connac_spe_idx(phy->mt76->antenna_mask))
+ 		req.tx_path_num = fls(phy->mt76->antenna_mask);
+ 
+-	if (phy->mt76->hw->conf.flags & IEEE80211_CONF_MONITOR)
++	if (phy->mt76->hw->conf.flags & IEEE80211_CONF_MONITOR &&
++	    !phy->mt76->offchannel)
+ 		req.switch_reason = CH_SWITCH_NORMAL;
+ 	else if (phy->mt76->offchannel ||
+ 		 phy->mt76->hw->conf.flags & IEEE80211_CONF_IDLE)

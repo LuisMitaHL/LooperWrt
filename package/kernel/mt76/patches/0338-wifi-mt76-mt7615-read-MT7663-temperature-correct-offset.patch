@@ -1,0 +1,40 @@
+commit 08dd35bb504cb65d3854f80fa8c96d7c4a56456c
+Author: Ahmed Naseef <naseefkm@gmail.com>
+Date:   Wed Aug 19 23:29:11 2026 +0400
+
+    wifi: mt76: mt7615: read MT7663 temperature from the correct offset
+    
+    On MT7663 the hwmon temp1_input attribute always reads 0.
+    
+    mt7615_mcu_parse_response() takes the temperature from the first dword of
+    the THERMAL_CTRL response payload, but MT7663 firmware reports it in the
+    second one. On a DASAN H660GM-A (MT7663E, N9 firmware 7663mp1827) the
+    request and its response are:
+    
+      request:  00 00 00 00
+      response: 00 00 00 00 2a 00 00 00
+    
+    0x2a is the reading, 42 degrees, while the driver returns the leading
+    zero. mt7915 and mt7921 already pull sizeof(*rxd) + 4 for this command.
+    
+    Restrict the extra pull to MT7663, as no MT7615 or MT7622 hardware was
+    available to check whether their firmware uses the same layout.
+    
+    Fixes: f40ac0f3d3c0 ("mt76: mt7615: introduce mt7663e support")
+    Signed-off-by: Ahmed Naseef <naseefkm@gmail.com>
+    Link: https://patch.msgid.link/20260819192911.1886457-1-naseefkm@gmail.com
+    Signed-off-by: Felix Fietkau <nbd@nbd.name>
+
+diff --git a/mt7615/mcu.c b/mt7615/mcu.c
+index ff57ede8..1ce0192c 100644
+--- a/mt7615/mcu.c
++++ b/mt7615/mcu.c
+@@ -153,6 +153,8 @@ int mt7615_mcu_parse_response(struct mt76_dev *mdev, int cmd,
+ 		ret = *skb->data;
+ 	} else if (cmd == MCU_EXT_CMD(THERMAL_CTRL)) {
+ 		skb_pull(skb, sizeof(*rxd));
++		if (is_mt7663(mdev))
++			skb_pull(skb, 4);
+ 		ret = le32_to_cpu(*(__le32 *)skb->data);
+ 	} else if (cmd == MCU_EXT_QUERY(RF_REG_ACCESS)) {
+ 		skb_pull(skb, sizeof(*rxd));
