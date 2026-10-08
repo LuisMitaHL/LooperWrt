@@ -95,37 +95,42 @@ case "$(board_name)" in
 		uci -q set uhttpd.main.rfc1918_filter='0'
 		uci -q commit uhttpd
 
-		# tailscale0 gets its own network interface and an ACCEPT-all
-		# mesh zone, with lan <-> mesh forwarding in both directions.
-		uci -q set network.tailscale=interface
-		uci -q set network.tailscale.proto='none'
-		uci -q set network.tailscale.device='tailscale0'
-		uci -q commit network
+		# tailscale is only installed on core/core_lite images. An ap-profile
+		# image (a dumb AP) has no tailscaled, so skip the tailscale iface
+		# and mesh zone there instead of leaving dead config behind.
+		if [ -x /usr/sbin/tailscaled ]; then
+			# tailscale0 gets its own network interface and an ACCEPT-all
+			# mesh zone, with lan <-> mesh forwarding in both directions.
+			uci -q set network.tailscale=interface
+			uci -q set network.tailscale.proto='none'
+			uci -q set network.tailscale.device='tailscale0'
+			uci -q commit network
 
-		uci -q set firewall.mesh=zone
-		uci -q set firewall.mesh.name='mesh'
-		uci -q set firewall.mesh.input='ACCEPT'
-		uci -q set firewall.mesh.output='ACCEPT'
-		uci -q set firewall.mesh.forward='ACCEPT'
-		uci -q set firewall.mesh.mtu_fix='1'
-		uci -q add_list firewall.mesh.network='tailscale'
-		uci -q add firewall forwarding
-		uci -q set firewall.@forwarding[-1].src='mesh'
-		uci -q set firewall.@forwarding[-1].dest='lan'
-		uci -q add firewall forwarding
-		uci -q set firewall.@forwarding[-1].src='lan'
-		uci -q set firewall.@forwarding[-1].dest='mesh'
-		uci -q commit firewall
+			uci -q set firewall.mesh=zone
+			uci -q set firewall.mesh.name='mesh'
+			uci -q set firewall.mesh.input='ACCEPT'
+			uci -q set firewall.mesh.output='ACCEPT'
+			uci -q set firewall.mesh.forward='ACCEPT'
+			uci -q set firewall.mesh.mtu_fix='1'
+			uci -q add_list firewall.mesh.network='tailscale'
+			uci -q add firewall forwarding
+			uci -q set firewall.@forwarding[-1].src='mesh'
+			uci -q set firewall.@forwarding[-1].dest='lan'
+			uci -q add firewall forwarding
+			uci -q set firewall.@forwarding[-1].src='lan'
+			uci -q set firewall.@forwarding[-1].dest='mesh'
+			uci -q commit firewall
 
-		# Tailscale direct traffic: allow inbound UDP on the fixed
-		# tailscaled port.
-		uci -q set firewall.tailscale_udp=rule
-		uci -q set firewall.tailscale_udp.name='Allow-Tailscale-UDP'
-		uci -q set firewall.tailscale_udp.src='wan'
-		uci -q set firewall.tailscale_udp.proto='udp'
-		uci -q set firewall.tailscale_udp.dest_port='41641'
-		uci -q set firewall.tailscale_udp.target='ACCEPT'
-		uci -q commit firewall
+			# Tailscale direct traffic: allow inbound UDP on the fixed
+			# tailscaled port.
+			uci -q set firewall.tailscale_udp=rule
+			uci -q set firewall.tailscale_udp.name='Allow-Tailscale-UDP'
+			uci -q set firewall.tailscale_udp.src='wan'
+			uci -q set firewall.tailscale_udp.proto='udp'
+			uci -q set firewall.tailscale_udp.dest_port='41641'
+			uci -q set firewall.tailscale_udp.target='ACCEPT'
+			uci -q commit firewall
+		fi
 
 		# Mark the defaults as applied so later upgrades skip them.
 		# /etc/config/* is preserved by sysupgrade, so the marker
