@@ -2,7 +2,8 @@
 . /lib/functions/system.sh
 
 case "$(board_name)" in
-	laotrared,aurora-v1-ubootmod)
+	laotrared,aurora-v1-ubootmod|\
+	cudy,tr3000-v1-ubootmod)
 		# uci-defaults re-run on the first boot after every flash,
 		# including a sysupgrade that keeps the settings. Apply the
 		# LooperWrt defaults only on top of a fresh (stock OpenWrt)
