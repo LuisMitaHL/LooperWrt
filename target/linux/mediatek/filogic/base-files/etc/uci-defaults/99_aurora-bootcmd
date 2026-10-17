@@ -1,0 +1,32 @@
+#!/bin/sh
+# Boot production after a panic instead of U-Boot's pstore->recovery
+# diversion, so the ramoops crash log can be read from /sys/fs/pstore on the
+# running system. fw_setenv writes the U-Boot environment volume, so this is
+# permanent (survives reboots and sysupgrades).
+#
+# Runs once, on the first boot after installing this image; retries on the
+# next boot if the environment cannot be written yet.
+#
+# Revert with:
+#   fw_setenv bootcmd 'if pstore check ; then run boot_recovery ; else run boot_ubi ; fi'
+
+. /lib/functions/system.sh
+
+command -v fw_setenv >/dev/null 2>&1 || exit 0
+
+case "$(board_name)" in
+	laotrared,aurora-v1-ubootmod) ;;
+	*) exit 0 ;;
+esac
+
+if [ ! -s /etc/fw_env.config ]; then
+	logger -t aurora-bootcmd "no /etc/fw_env.config yet; will retry"
+	exit 1
+fi
+
+bootcmd="$(fw_printenv -n bootcmd 2>/dev/null)"
+[ "$bootcmd" = "run boot_ubi" ] && exit 0
+
+fw_setenv bootcmd 'run boot_ubi' || exit 1
+logger -t aurora-bootcmd "bootcmd set to run boot_ubi (was: $bootcmd)"
+exit 0
