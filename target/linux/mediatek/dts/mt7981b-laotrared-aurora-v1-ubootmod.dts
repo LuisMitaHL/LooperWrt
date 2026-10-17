@@ -306,3 +306,23 @@
 	nvmem-cells = <&eeprom_factory_0>;
 	nvmem-cell-names = "eeprom";
 };
+
+/*
+ * Crash capture for the MT7981 AP hang investigation.
+ *
+ * The mt7981b.dtsi node only sets record-size, so console-size and pmsg-size
+ * stay 0 (the Chromebook fallback does not apply under /reserved-memory) and
+ * /sys/fs/pstore can never hold the pre-hang log. Fill all zones in.
+ *
+ * Keep this geometry identical to U-Boot's CONFIG_CMD_PSTORE_* values
+ * (0x42ff0000, 0x10000 total, 0x1000 record/console/ftrace/pmsg): U-Boot's
+ * "pstore check" runs before every boot and scans the dump records, so a
+ * mismatch makes it misparse the zones.
+ */
+&{/reserved-memory/ramoops@42ff0000} {
+	record-size = <0x1000>;
+	console-size = <0x1000>;
+	ftrace-size = <0x1000>;
+	pmsg-size = <0x1000>;
+	no-map;
+};
