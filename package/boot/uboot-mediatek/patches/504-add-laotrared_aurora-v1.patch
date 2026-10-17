@@ -272,7 +272,7 @@
 +serverip=192.168.1.254
 +loadaddr=0x46000000
 +console=earlycon=uart8250,mmio32,0x11002000 console=ttyS0
-+bootcmd=if pstore check ; then run boot_recovery ; else run boot_ubi ; fi
++bootcmd=run boot_ubi
 +bootconf=config-1
 +bootdelay=0
 +bootfile=openwrt-mediatek-filogic-laotrared_aurora-v1-ubootmod-initramfs-recovery.itb
