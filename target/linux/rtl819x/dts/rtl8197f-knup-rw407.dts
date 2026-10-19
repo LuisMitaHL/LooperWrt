@@ -152,8 +152,15 @@
 						reg = <0x0002000d 0x6>;
 					};
 
-					macaddr_wifi5: mac-address@20013 {
-						reg = <0x00020013 0x6>;
+					/*
+					 * 1600-byte vendor WLAN calibration block:
+					 * MAC at +0, XTAL at +149, thermal at +152,
+					 * per-channel 5 GHz power indices after that.
+					 * rtw88 patch 900 turns it into EFUSE data
+					 * (and forces RFE option 1).
+					 */
+					rtl8822b_calibration: calibration@20013 {
+						reg = <0x00020013 0x640>;
 					};
 
 					macaddr_wifi24: mac-address@209d6 {
@@ -205,6 +212,8 @@
 			compatible = "pci10ec,b822";
 			reg = <0x0000 0 0 0 0>;
 			ieee80211-freq-limit = <5000000 6000000>;
+			nvmem-cells = <&rtl8822b_calibration>;
+			nvmem-cell-names = "rtl8197f-calibration";
 		};
 	};
 };
