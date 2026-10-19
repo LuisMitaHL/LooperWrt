@@ -1,0 +1,24 @@
+Subject: [PATCH] hostapd: only run the RRM link measurement handler for pending requests
+
+OpenWrt's ubus binding lets userspace (usteer) send Link Measurement
+Requests itself. hostapd_rrm_lm_req() builds those with dialog token 1 and
+does not use the upstream hapd->link_mesr_req_active state, so every
+response was passed to hostapd_handle_link_mesr_report(), which logs
+"Unexpected Link measurement report, token 1" at MSG_INFO.
+
+Only feed the upstream handler when it actually has a request pending. The
+ubus notification is emitted separately, so usteer keeps working.
+
+Link: https://github.com/openwrt/openwrt/issues/25918
+--- a/src/ap/rrm.c
++++ b/src/ap/rrm.c
+@@ -409,7 +409,8 @@
+ 		hostapd_handle_nei_report_req(hapd, buf, len);
+ 		break;
+ 	case WLAN_RRM_LINK_MEASUREMENT_REPORT:
+-		hostapd_handle_link_mesr_report(hapd, buf, len);
++		if (hapd->link_mesr_req_active)
++			hostapd_handle_link_mesr_report(hapd, buf, len);
+ 		hostapd_ubus_handle_link_measurement(hapd, buf, len);
+ 		break;
+ 	default:
