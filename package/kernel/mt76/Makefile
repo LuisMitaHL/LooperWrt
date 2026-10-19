@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mt76
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 # MT7981 firmware is carried in files/firmware: mt76 master updates
 # mt7981_wm/wa/rom_patch to version 20260515 (upstream commit 2dd6e4c), but
