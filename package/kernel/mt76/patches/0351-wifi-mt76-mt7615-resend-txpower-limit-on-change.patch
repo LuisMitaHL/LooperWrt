@@ -1,0 +1,148 @@
+--- a/mt7615/eeprom.c
++++ b/mt7615/eeprom.c
+@@ -330,6 +330,56 @@
+ 	}
+ }
+ 
++static void mt7615_eeprom_save_txpower(struct mt7615_dev *dev)
++{
++	u8 *eep = dev->mt76.eeprom.data;
++	int i;
++
++	BUILD_BUG_ON(ARRAY_SIZE(dev->txpower_orig[0]) != __MT_CH_MAX);
++
++	if (!is_mt7663(&dev->mt76))
++		return;
++
++	for (i = 0; i < __MT_CH_MAX; i++) {
++		dev->txpower_orig[0][i] =
++			eep[MT7663_EE_TX0_5G_G0_TARGET_POWER + i * 3];
++		dev->txpower_orig[1][i] =
++			eep[MT7663_EE_TX1_5G_G0_TARGET_POWER + i * 3];
++	}
++}
++
++/* The MT7663/MT7613 AP firmware reads its channel power limits from the
++ * EFUSE buffer when it initialises and ignores later per-rate/low-power
++ * requests. Send it the factory table again with the per-chain target
++ * lowered from the configured power. The written value is always the
++ * minimum of the factory value and the requested cap, so this can only
++ * reduce the target, never raise it above the calibrated one.
++ */
++int mt7615_eeprom_set_txpower_cap(struct mt7615_dev *dev, int target)
++{
++	u8 *eep = dev->mt76.eeprom.data;
++	int i;
++
++	if (!is_mt7663(&dev->mt76))
++		return -EOPNOTSUPP;
++
++	target = clamp_t(int, target, 0, 0x3f);
++	for (i = 0; i < __MT_CH_MAX; i++) {
++		u8 tx0 = dev->txpower_orig[0][i];
++		u8 tx1 = dev->txpower_orig[1][i];
++
++		/* leave unset/absent calibration entries untouched */
++		if (tx0 != 0xff)
++			eep[MT7663_EE_TX0_5G_G0_TARGET_POWER + i * 3] =
++				min_t(u8, tx0, target);
++		if (tx1 != 0xff)
++			eep[MT7663_EE_TX1_5G_G0_TARGET_POWER + i * 3] =
++				min_t(u8, tx1, target);
++	}
++
++	return mt7615_mcu_set_eeprom(dev);
++}
++
+ int mt7615_eeprom_init(struct mt7615_dev *dev, u32 addr)
+ {
+ 	int ret;
+@@ -347,6 +397,7 @@
+ 		mt7615_cal_free_data(dev);
+ 	}
+ 
++	mt7615_eeprom_save_txpower(dev);
+ 	mt7615_eeprom_parse_hw_cap(dev);
+ 	memcpy(dev->mphy.macaddr, dev->mt76.eeprom.data + MT_EE_MAC_ADDR,
+ 	       ETH_ALEN);
+--- a/mt7615/main.c
++++ b/mt7615/main.c
+@@ -420,6 +420,26 @@
+ 	return mt76_update_channel(phy->mt76);
+ }
+ 
++static void mt7615_apply_txpower(struct mt7615_phy *phy, int power)
++{
++	struct mt7615_dev *dev = phy->dev;
++	int tx_power;
++
++	/* no limit known yet (boot, or user "auto"): keep the factory table */
++	if (power <= 0 || phy->txpower_target == power)
++		return;
++
++	tx_power = power * 2;
++	tx_power -= mt76_tx_power_path_delta(hweight8(phy->mt76->antenna_mask));
++	tx_power = max_t(int, tx_power, 0);
++
++	if (mt7615_eeprom_set_txpower_cap(dev, tx_power))
++		return;
++
++	phy->txpower_target = power;
++	mt7615_mcu_set_chan_info(phy, MCU_EXT_CMD(CHANNEL_SWITCH));
++}
++
+ static int mt7615_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
+ {
+ 	struct mt7615_dev *dev = mt7615_hw_dev(hw);
+@@ -439,6 +459,12 @@
+ 		ret = mt76_update_channel(phy->mt76);
+ 	}
+ 
++	if (changed & IEEE80211_CONF_CHANGE_POWER) {
++		mt7615_mutex_acquire(dev);
++		mt7615_apply_txpower(phy, hw->conf.power_level);
++		mt7615_mutex_release(dev);
++	}
++
+ 	mt7615_mutex_acquire(dev);
+ 
+ 	if (changed & IEEE80211_CONF_CHANGE_MONITOR) {
+@@ -574,6 +600,9 @@
+ 
+ 	mt7615_mutex_acquire(dev);
+ 
++	if (changed & BSS_CHANGED_TXPOWER)
++		mt7615_apply_txpower(phy, info->txpower);
++
+ 	if (changed & BSS_CHANGED_ERP_SLOT) {
+ 		int slottime = info->use_short_slot ? 9 : 20;
+ 
+--- a/mt7615/mt7615.h
++++ b/mt7615/mt7615.h
+@@ -173,6 +173,8 @@
+ 	s8 ofdm_sensitivity;
+ 	s8 cck_sensitivity;
+ 
++	int txpower_target;
++
+ 	s16 coverage_class;
+ 	u8 slottime;
+ 
+@@ -273,6 +275,9 @@
+ 	bool flash_eeprom;
+ 	bool dbdc_support;
+ 
++	/* MT7663 per-chain 5G target power, __MT_CH_MAX channel groups */
++	u8 txpower_orig[2][8];
++
+ 	u8 fw_ver;
+ 
+ 	struct work_struct rate_work;
+@@ -383,6 +388,7 @@
+ int mt7615_register_ext_phy(struct mt7615_dev *dev);
+ void mt7615_unregister_ext_phy(struct mt7615_dev *dev);
+ int mt7615_eeprom_init(struct mt7615_dev *dev, u32 addr);
++int mt7615_eeprom_set_txpower_cap(struct mt7615_dev *dev, int target);
+ int mt7615_eeprom_get_target_power_index(struct mt7615_dev *dev,
+ 					 struct ieee80211_channel *chan,
+ 					 u8 chain_idx);
