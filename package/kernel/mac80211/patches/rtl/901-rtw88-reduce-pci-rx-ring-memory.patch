@@ -1,0 +1,11 @@
+--- a/drivers/net/wireless/realtek/rtw88/pci.h
++++ b/drivers/net/wireless/realtek/rtw88/pci.h
+@@ -10,7 +10,7 @@
+ #define RTK_DEFAULT_TX_DESC_NUM 128
+ #define RTK_BEQ_TX_DESC_NUM	256
+ 
+-#define RTK_MAX_RX_DESC_NUM	512
++#define RTK_MAX_RX_DESC_NUM	128
+ /* 11K + rx desc size */
+ #define RTK_PCI_RX_BUF_SIZE	(11454 + 24)
+ 

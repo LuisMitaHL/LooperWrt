@@ -139,6 +139,8 @@ set ${si}.key='${defaults?.key || ""}'
 set ${si}.disabled='${defaults ? 0 : 1}'
 
 `);
+		if (phy.path == "virtual/RTKWiFi0/RTKWiFi0")
+			print(`set ${si}.ifname='wlan0'\nset ${si}.macaddr='${macaddr}'\n`);
 		config[name] = {};
 		commit = true;
 	}

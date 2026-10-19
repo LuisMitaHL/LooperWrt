@@ -1,0 +1,207 @@
+--- a/drivers/net/wireless/realtek/rtw88/main.c
++++ b/drivers/net/wireless/realtek/rtw88/main.c
+@@ -2301,5 +2301,6 @@ int rtw_register_hw(struct rtw_dev *rtwd
+ #endif
+ 	rtw_set_supported_band(hw, rtwdev->chip);
++	wiphy_read_of_freq_limits(hw->wiphy);
+ 	SET_IEEE80211_PERM_ADDR(hw, rtwdev->efuse.addr);
+ 
+ 	hw->wiphy->sar_capa = &rtw_sar_capa;
+--- a/drivers/net/wireless/realtek/rtw88/rtw8822b.c
++++ b/drivers/net/wireless/realtek/rtw88/rtw8822b.c
+@@ -3,6 +3,7 @@
+ /* Copyright(c) 2018-2019  Realtek Corporation
+  */
+ 
++#include <linux/nvmem-consumer.h>
+ #include <linux/module.h>
+ #include "main.h"
+ #include "coex.h"
+@@ -38,10 +39,144 @@ static void rtw8822bs_efuse_parsing(stru
+ 	ether_addr_copy(efuse->addr, map->s.mac_addr);
+ }
+ 
++#define RTL8197F_WLAN_CAL_LEN		1600
++#define RTL8197F_WLAN_MAC		0
++#define RTL8197F_WLAN_XTAL		149
++#define RTL8197F_WLAN_THERMAL		152
++#define RTL8197F_WLAN_5G_BASE_A		163
++#define RTL8197F_WLAN_5G_BASE_B		359
++#define RTL8197F_WLAN_5G_HT1_A		1250
++#define RTL8197F_WLAN_5G_HT2_A		1264
++#define RTL8197F_WLAN_5G_VHT1_A		1320
++#define RTL8197F_WLAN_5G_VHT2_A		1334
++#define RTL8197F_WLAN_5G_HT1_B		1474
++#define RTL8197F_WLAN_5G_HT2_B		1488
++#define RTL8197F_WLAN_5G_VHT1_B		1544
++#define RTL8197F_WLAN_5G_VHT2_B		1558
++#define RTL8197F_WLAN_5G_GROUPS		14
++
++static const u8 rtl8197f_5g_group_channel[RTL8197F_WLAN_5G_GROUPS] = {
++	36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157, 165, 173
++};
++
++static s8 rtw8822b_rtl8197f_s4(u8 value)
++{
++	value &= 0xf;
++	return value & BIT(3) ? value - 16 : value;
++}
++
++static s8 rtw8822b_rtl8197f_min_diff(const u8 *cal, unsigned int offset,
++				      bool high)
++{
++	s8 min = 7;
++	int i;
++
++	for (i = 0; i < RTL8197F_WLAN_5G_GROUPS; i++) {
++		u8 value = high ? cal[offset + i] >> 4 : cal[offset + i];
++		s8 diff = rtw8822b_rtl8197f_s4(value);
++
++		min = min_t(s8, min, diff);
++	}
++
++	return min;
++}
++
++static int rtw8822b_read_rtl8197f_calibration(struct rtw_dev *rtwdev)
++{
++	static const unsigned int base_offset[] = {
++		RTL8197F_WLAN_5G_BASE_A, RTL8197F_WLAN_5G_BASE_B
++	};
++	static const unsigned int ht1_offset[] = {
++		RTL8197F_WLAN_5G_HT1_A, RTL8197F_WLAN_5G_HT1_B
++	};
++	static const unsigned int ht2_offset[] = {
++		RTL8197F_WLAN_5G_HT2_A, RTL8197F_WLAN_5G_HT2_B
++	};
++	static const unsigned int vht1_offset[] = {
++		RTL8197F_WLAN_5G_VHT1_A, RTL8197F_WLAN_5G_VHT1_B
++	};
++	static const unsigned int vht2_offset[] = {
++		RTL8197F_WLAN_5G_VHT2_A, RTL8197F_WLAN_5G_VHT2_B
++	};
++	struct rtw_efuse *efuse = &rtwdev->efuse;
++	struct nvmem_cell *cell;
++	size_t len;
++	u8 *cal;
++	int path;
++	int i;
++	int ret = 0;
++
++	cell = devm_nvmem_cell_get(rtwdev->dev, "rtl8197f-calibration");
++	if (IS_ERR(cell))
++		return PTR_ERR(cell);
++
++	cal = nvmem_cell_read(cell, &len);
++	if (IS_ERR(cal))
++		return PTR_ERR(cal);
++
++	if (len != RTL8197F_WLAN_CAL_LEN ||
++	    !is_valid_ether_addr(cal + RTL8197F_WLAN_MAC)) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	for (path = RF_PATH_A; path <= RF_PATH_B; path++) {
++		struct rtw_5g_txpwr_idx *pwr =
++			&efuse->txpwr_idx_table[path].pwr_idx_5g;
++
++		for (i = 0; i < RTL8197F_WLAN_5G_GROUPS; i++) {
++			u8 index = cal[base_offset[path] +
++				       rtl8197f_5g_group_channel[i] - 1];
++
++			if (!index || index > rtwdev->chip->max_power_index) {
++				ret = -EINVAL;
++				goto out;
++			}
++			pwr->bw40_base[i] = index;
++		}
++
++		pwr->ht_1s_diff.ofdm =
++			rtw8822b_rtl8197f_min_diff(cal, ht1_offset[path], false);
++		pwr->ht_1s_diff.bw20 =
++			rtw8822b_rtl8197f_min_diff(cal, ht1_offset[path], true);
++		pwr->ht_2s_diff.bw20 =
++			rtw8822b_rtl8197f_min_diff(cal, ht2_offset[path], false);
++		pwr->ht_2s_diff.bw40 =
++			rtw8822b_rtl8197f_min_diff(cal, ht2_offset[path], true);
++		pwr->vht_1s_diff.bw160 =
++			rtw8822b_rtl8197f_min_diff(cal, vht1_offset[path], false);
++		pwr->vht_1s_diff.bw80 =
++			rtw8822b_rtl8197f_min_diff(cal, vht1_offset[path], true);
++		pwr->vht_2s_diff.bw160 =
++			rtw8822b_rtl8197f_min_diff(cal, vht2_offset[path], false);
++		pwr->vht_2s_diff.bw80 =
++			rtw8822b_rtl8197f_min_diff(cal, vht2_offset[path], true);
++	}
++
++	ether_addr_copy(efuse->addr, cal + RTL8197F_WLAN_MAC);
++	efuse->rfe_option = 1;
++	efuse->crystal_cap = cal[RTL8197F_WLAN_XTAL];
++	efuse->thermal_meter[RF_PATH_A] = cal[RTL8197F_WLAN_THERMAL];
++	efuse->thermal_meter_k = cal[RTL8197F_WLAN_THERMAL];
++	efuse->pa_type_2g = BIT(4);
++	efuse->pa_type_5g = BIT(0);
++	efuse->lna_type_2g = BIT(3);
++	efuse->lna_type_5g = BIT(3);
++	efuse->channel_plan = 0x7f;
++	efuse->rf_board_option = 0;
++	efuse->regd = 0;
++
++	rtw_info(rtwdev, "loaded RTL8197F RFE1 calibration from nvmem\n");
++out:
++	kfree(cal);
++	return ret;
++}
++
+ static int rtw8822b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+ {
+ 	struct rtw_efuse *efuse = &rtwdev->efuse;
+ 	struct rtw8822b_efuse *map;
++	int ret;
+ 	int i;
+ 
+ 	map = (struct rtw8822b_efuse *)log_map;
+@@ -83,6 +218,12 @@ static int rtw8822b_read_efuse(struct rt
+ 		return -ENOTSUPP;
+ 	}
+ 
++	if (efuse->rfe_option == 0xff) {
++		ret = rtw8822b_read_rtl8197f_calibration(rtwdev);
++		if (ret && ret != -ENOENT)
++			return ret;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -405,5 +546,12 @@ struct rtw8822b_rfe_info {
+	.rtw_set_channel_rfe = &rtw8822b_set_channel_rfe_ ## set_ch,	\
+	}
++#define EFEM_CCUT(set_ch) {						\
++	.cca_ccut_2g = &cca_efem_ccut,					\
++	.cca_ccut_5g = &cca_efem_ccut,					\
++	.fem = RTW_RFE_EFEM,						\
++	.rtw_set_channel_rfe = &rtw8822b_set_channel_rfe_ ## set_ch,	\
++	}
++
+ #define IFEM_EXT_CCUT(set_ch) {						\
+ 	.cca_ccut_2g = &cca_ifem_ccut_ext,				\
+ 	.cca_ccut_5g = &cca_ifem_ccut_ext,				\
+@@ -413,6 +561,7 @@ struct rtw8822b_rfe_info {
+ 	}
+ 
+ static const struct rtw8822b_rfe_info rtw8822b_rfe_info[] = {
++	[1] = EFEM_CCUT(ifem),
+ 	[2] = I2GE5G_CCUT(efem),
+ 	[3] = IFEM_EXT_CCUT(ifem),
+ 	[5] = IFEM_EXT_CCUT(ifem),
+@@ -2475,6 +2624,8 @@ static const struct rtw_pwr_track_tbl rt
+ };
+ 
+ static const struct rtw_rfe_def rtw8822b_rfe_defs[] = {
++	/* RFE1 and RFE2 both use an external FEM on this board's 5 GHz band. */
++	[1] = RTW_DEF_RFE(8822b, 2, 2, 0),
+ 	[2] = RTW_DEF_RFE(8822b, 2, 2, 0),
+ 	[3] = RTW_DEF_RFE(8822b, 3, 0, 0),
+ 	[5] = RTW_DEF_RFE(8822b, 5, 5, 0),

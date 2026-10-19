@@ -1,0 +1,27 @@
+--- a/drivers/pci/controller/Kconfig
++++ b/drivers/pci/controller/Kconfig
+@@ -13,6 +13,14 @@ config PCIE_APPLE_MSI_DOORBELL_ADDR
+ 	default 0xfffff000
+ 	depends on PCIE_APPLE
+
++config PCIE_RTL8197F
++	bool "Realtek RTL8197F PCIe controller"
++	depends on MACH_REALTEK_RTL819X
++	default MACH_REALTEK_RTL819X
++	help
++	  Root complex driver for the single-lane PCIe port on Realtek
++	  RTL8197F-class router SoCs, used for the companion Wi-Fi chip.
++
+ config PCIE_ALTERA
+ 	bool "Altera PCIe controller"
+ 	depends on ARM || NIOS2 || ARM64 || RISCV || COMPILE_TEST
+--- a/drivers/pci/controller/Makefile
++++ b/drivers/pci/controller/Makefile
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_PCIE_CADENCE) += cadence/
+ obj-$(CONFIG_PCI_FTPCI100) += pci-ftpci100.o
++obj-$(CONFIG_PCIE_RTL8197F) += pcie-rtl8197f.o
+ obj-$(CONFIG_PCI_IXP4XX) += pci-ixp4xx.o
+ obj-$(CONFIG_PCI_HYPERV) += pci-hyperv.o
+ obj-$(CONFIG_PCI_HYPERV_INTERFACE) += pci-hyperv-intf.o

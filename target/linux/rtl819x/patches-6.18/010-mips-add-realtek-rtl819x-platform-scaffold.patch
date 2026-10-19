@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenWrt RTL8197F scaffold <noreply@example.invalid>
+Date: Tue, 7 Jul 2026 00:00:00 +0900
+Subject: [PATCH] mips: add Realtek RTL819x platform scaffold
+
+Add a minimal RTL819x-class platform Kconfig hook for RTL8197F Stage 0
+bring-up. This does not claim compatibility with the existing RTL83xx/RTL93xx
+Realtek switch SoC platform.
+
+---
+ arch/mips/Kbuild.platforms | 1 +
+ arch/mips/Kconfig          | 18 ++++++++++++++++++
+ arch/mips/rtl819x/Platform | 8 ++++++++
+ 3 files changed, 27 insertions(+)
+ create mode 100644 arch/mips/rtl819x/Platform
+
+--- a/arch/mips/Kbuild.platforms
++++ b/arch/mips/Kbuild.platforms
+@@ -24,6 +24,7 @@ platform-$(CONFIG_MACH_NINTENDO64)	+= n64/
+ platform-$(CONFIG_PIC32MZDA)		+= pic32/
+ platform-$(CONFIG_RALINK)		+= ralink/
+ platform-$(CONFIG_MIKROTIK_RB532)	+= rb532/
++platform-$(CONFIG_MACH_REALTEK_RTL819X)	+= rtl819x/
+ platform-$(CONFIG_SGI_IP22)		+= sgi-ip22/
+ platform-$(CONFIG_SGI_IP27)		+= sgi-ip27/
+ platform-$(CONFIG_SGI_IP28)		+= sgi-ip22/
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -695,6 +695,24 @@ config MACH_REALTEK_RTL
+ 	select ARCH_HAS_RESET_CONTROLLER
+ 	select RESET_CONTROLLER
+ 
++config MACH_REALTEK_RTL819X
++	bool "Realtek RTL819x-class router SoCs"
++	select BOOT_RAW
++	select CEVT_R4K
++	select COMMON_CLK
++	select CSRC_R4K
++	select DMA_NONCOHERENT
++	select HAVE_PCI
++	select IRQ_MIPS_CPU
++	select PCI_DRIVERS_GENERIC
++	select SYS_HAS_CPU_MIPS32_R2
++	select SYS_SUPPORTS_32BIT_KERNEL
++	select SYS_SUPPORTS_LITTLE_ENDIAN
++	select USE_OF
++	select SYS_HAS_EARLY_PRINTK
++	help
++	  Provisional platform hook for RTL8197F-class router SoC bring-up.
++
+ config SGI_IP22
+ 	bool "SGI IP22 (Indy/Indigo2)"
+ 	select ARC_MEMORY
+--- /dev/null
++++ b/arch/mips/rtl819x/Platform
+@@ -0,0 +1,8 @@
++# SPDX-License-Identifier: GPL-2.0
++# Provisional RTL819x-class platform hook.
++# Legacy RTL8197F rtkmipsel references use 0x80000000 as the decompressed
++# kernel LOADADDR. This is a compile-time scaffold link address only; it does
++# not assert an A2004MU factory image, loader, or bootloader jump contract.
++#
++load-$(CONFIG_MACH_REALTEK_RTL819X) += 0x80000000
++

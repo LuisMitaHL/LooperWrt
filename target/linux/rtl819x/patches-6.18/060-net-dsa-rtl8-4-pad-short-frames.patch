@@ -1,0 +1,16 @@
+--- a/net/dsa/tag_rtl8_4.c
++++ b/net/dsa/tag_rtl8_4.c
+@@ -129,6 +129,13 @@ static void rtl8_4_write_tag(struct sk_bu
+ static struct sk_buff *rtl8_4_tag_xmit(struct sk_buff *skb,
+ 				       struct net_device *dev)
+ {
++	/* The switch removes the 8-byte tag before transmitting the frame.
++	 * Pad the untagged frame first so it remains at least ETH_ZLEN bytes
++	 * after the tag is removed.
++	 */
++	if (unlikely(__skb_put_padto(skb, ETH_ZLEN, false)))
++		return NULL;
++
+ 	skb_push(skb, RTL8_4_TAG_LEN);
+ 
+ 	dsa_alloc_etype_header(skb, RTL8_4_TAG_LEN);

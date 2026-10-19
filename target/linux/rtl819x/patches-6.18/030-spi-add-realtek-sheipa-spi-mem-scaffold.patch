@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenWrt RTL8197F scaffold <noreply@example.invalid>
+Date: Tue, 7 Jul 2026 00:00:00 +0900
+Subject: [PATCH] spi: add Realtek Sheipa SPI memory scaffold
+
+Add a polling-first spi-mem scaffold for the Realtek Sheipa SPI controller used
+as the RTL8197F boot flash controller. JEDEC/read/erase/program sequences are
+left as TODOs until the controller contract is forward-ported from the GPLv2
+8devices reference driver.
+
+---
+ drivers/spi/Kconfig                  |  10 +++
+ drivers/spi/Makefile                 |   1 +
+ drivers/spi/spi-realtek-sheipa.c     | 145 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 156 insertions(+)
+ create mode 100644 drivers/spi/spi-realtek-sheipa.c
+
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -1254,6 +1254,17 @@ config SPI_REALTEK_SNAND
+ 	help
+ 	  This selects the Realtek SPI NAND Flash controller driver.
+ 
++config SPI_REALTEK_SHEIPA
++	tristate "Realtek Sheipa SPI flash controller scaffold"
++	depends on MACH_REALTEK_RTL819X || COMPILE_TEST
++	depends on SPI_MEM
++	help
++	  Enable a provisional spi-mem driver for the Realtek Sheipa SPI
++	  controller used by RTL8197F-class SoCs for boot SPI NOR. The initial
++	  implementation is polling-only and supports the read-only operations
++	  needed for early SPI NOR probing. Erase and page program sequences
++	  remain TODOs.
++
+ config SPI_S3C64XX
+ 	tristate "Samsung S3C64XX series type SPI"
+ 	depends on PLAT_SAMSUNG || ARCH_S5PV210 || ARCH_EXYNOS || COMPILE_TEST
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -128,4 +128,5 @@ obj-$(CONFIG_SPI_RB4XX)			+= spi-rb4xx.o
+ obj-$(CONFIG_SPI_REALTEK_SNAND)		+= spi-realtek-rtl-snand.o
++obj-$(CONFIG_SPI_REALTEK_SHEIPA)	+= spi-realtek-sheipa.o
+ obj-$(CONFIG_SPI_RPCIF)			+= spi-rpc-if.o
+ obj-$(CONFIG_SPI_RSPI)			+= spi-rspi.o
+ obj-$(CONFIG_SPI_RZV2H_RSPI)		+= spi-rzv2h-rspi.o
+--- /dev/null
++++ b/drivers/spi/spi-realtek-sheipa.c
+@@ -0,0 +1,277 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Realtek RTL8197F "Sheipa" SPI flash controller (a Synopsys DesignWare SSI).
++ *
++ * BSP_SPIC_BASE = 0x18143000 (KSEG1 0xb8143000). The boot SPI-NOR is wired to
++ * this controller. Read sequencing follows the RTL8197F SDK
++ * (drivers/spi/sheipa/spi-sheipa.c), reimplemented from the register-level
++ * hardware facts: for a read the command + address are pushed into the TX FIFO
++ * FIRST, and only then is the controller enabled (SSIENR = 1). Enabling before
++ * loading the FIFO -- as an earlier version did -- starts the transfer with the
++ * wrong framing and wedges the controller.
++ */
++
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/minmax.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/spi/spi.h>
++#include <linux/spi/spi-mem.h>
++#include <linux/string.h>
++
++#define DW_CTRLR0	0x00
++#define DW_CTRLR1	0x04
++#define DW_SSIENR	0x08
++#define DW_SER		0x10
++#define DW_BAUDR	0x14
++#define DW_TXFLR	0x20
++#define DW_RXFLR	0x24
++#define DW_SR		0x28
++#define DW_DR0		0x60
++
++#define DW_CTRLR0_DFS_8BIT	0x7		/* data frame size = 8 bits */
++#define DW_CTRLR0_TMOD_MASK	(3 << 8)
++#define DW_CTRLR0_TMOD_TX	(1 << 8)	/* transmit only: cmd/addr/data out */
++#define DW_CTRLR0_TMOD_EEPROM	(3 << 8)	/* EEPROM read: tx cmd, then rx */
++
++#define DW_SR_BUSY	BIT(0)
++#define DW_SR_TFNF	BIT(1)			/* TX FIFO not full */
++#define DW_SR_TFE	BIT(2)			/* TX FIFO empty */
++#define DW_SR_RFNE	BIT(3)			/* RX FIFO not empty */
++
++#define DW_BAUDR_DIV	20			/* conservative SPI clock divider */
++#define DW_RX_CHUNK	64			/* RX FIFO depth */
++#define DW_TX_CHUNK	32			/* leave room for command/address */
++#define DW_POLL_US	1000000
++
++struct rtl_sheipa {
++	void __iomem *base;
++};
++
++static u32 dw_rd(struct rtl_sheipa *s, u32 reg)
++{
++	return readl(s->base + reg);
++}
++
++static void dw_wr(struct rtl_sheipa *s, u32 reg, u32 val)
++{
++	writel(val, s->base + reg);
++}
++
++static int dw_wait(struct rtl_sheipa *s, u32 mask, u32 val)
++{
++	unsigned int t = DW_POLL_US;
++
++	while (t--) {
++		if ((dw_rd(s, DW_SR) & mask) == val)
++			return 0;
++		udelay(1);
++	}
++	return -ETIMEDOUT;
++}
++
++static int rtl_sheipa_read_op(struct rtl_sheipa *s, unsigned int cs, u8 opcode,
++			      u64 addr, unsigned int addr_nbytes,
++			      unsigned int dummy_nbytes, void *buf,
++			      unsigned int len)
++{
++	u8 *rx = buf;
++	unsigned int i;
++	u32 data;
++	int ret;
++
++	if (!len || len > DW_RX_CHUNK)
++		return -EINVAL;
++
++	/* Controller must be idle and disabled to (re)configure. */
++	ret = dw_wait(s, DW_SR_BUSY, 0);
++	if (ret)
++		return ret;
++
++	dw_wr(s, DW_SSIENR, 0);
++
++	/*
++	 * EEPROM read mode + single-bit channels, preserving the DFS and SPI
++	 * mode the bootloader configured (like the SDK's set_rx_mode).
++	 */
++	dw_wr(s, DW_CTRLR0, (dw_rd(s, DW_CTRLR0) | DW_CTRLR0_TMOD_EEPROM) & 0xfff0ffff);
++	/*
++	 * This DesignWare variant loads CTRLR1 as the exact number of receive
++	 * frames (not the classic NDF = frames - 1): programming len - 1 yields
++	 * only len - 1 bytes and the final read blocks forever.
++	 */
++	dw_wr(s, DW_CTRLR1, len);
++	dw_wr(s, DW_BAUDR, DW_BAUDR_DIV);
++	dw_wr(s, DW_SER, BIT(cs));
++
++	/*
++	 * Load command/address/dummy into the TX FIFO. Each access to the data
++	 * register queues frames according to its WIDTH on this DesignWare
++	 * variant, so a byte write queues exactly one 8-bit frame -- a 32-bit
++	 * write would queue four and corrupt the framing.
++	 */
++	writeb(opcode, s->base + DW_DR0);
++	for (i = 0; i < addr_nbytes; i++)
++		writeb(addr >> (8 * (addr_nbytes - 1 - i)), s->base + DW_DR0);
++	for (i = 0; i < dummy_nbytes; i++)
++		writeb(0, s->base + DW_DR0);
++
++	/* Now start the transfer. */
++	dw_wr(s, DW_SSIENR, 1);
++
++	/*
++	 * The SDK waits for the transfer to finish, then drains four RX frames
++	 * per DR0 read. This avoids polling and MMIO once for every byte.
++	 */
++	ret = dw_wait(s, DW_SR_BUSY, 0);
++	if (ret)
++		goto out;
++	for (i = 0; i + sizeof(data) <= len; i += sizeof(data)) {
++		data = readl(s->base + DW_DR0);
++		memcpy(rx + i, &data, sizeof(data));
++	}
++	if (i < len) {
++		data = readl(s->base + DW_DR0);
++		memcpy(rx + i, &data, len - i);
++	}
++
++out:
++	dw_wr(s, DW_SSIENR, 0);
++	return ret;
++}
++
++/*
++ * Transmit-only transaction: command, optional address and optional data all go
++ * out on MOSI (write-enable, page program, sector/block erase). No RX. The
++ * whole frame must fit in the TX FIFO so the controller does not underrun and
++ * drop chip-select mid-command; adjust_op_size caps the data accordingly.
++ */
++static int rtl_sheipa_write_op(struct rtl_sheipa *s, unsigned int cs, u8 opcode,
++			       u64 addr, unsigned int addr_nbytes,
++			       const void *buf, unsigned int len)
++{
++	const u8 *tx = buf;
++	unsigned int i;
++	int ret;
++
++	ret = dw_wait(s, DW_SR_BUSY, 0);
++	if (ret)
++		return ret;
++
++	dw_wr(s, DW_SSIENR, 0);
++	/*
++	 * TX uses TMOD = 00 (transmit & receive), like the SDK's set_tx_mode
++	 * which just clears the TMOD bits. TMOD = 01 (transmit-only) does not
++	 * actually shift the data out on this DesignWare variant, so the flash
++	 * is never programmed and jffs2 spins forever. The RX frames clocked in
++	 * alongside the transmit are ignored (they fit the FIFO since data is
++	 * capped to 32 bytes by adjust_op_size).
++	 */
++	dw_wr(s, DW_CTRLR0,
++	      dw_rd(s, DW_CTRLR0) & 0xfff0ffff & ~DW_CTRLR0_TMOD_MASK);
++	dw_wr(s, DW_BAUDR, DW_BAUDR_DIV);
++	dw_wr(s, DW_SER, BIT(cs));
++
++	writeb(opcode, s->base + DW_DR0);
++	for (i = 0; i < addr_nbytes; i++)
++		writeb(addr >> (8 * (addr_nbytes - 1 - i)), s->base + DW_DR0);
++	for (i = 0; i < len; i++)
++		writeb(tx[i], s->base + DW_DR0);
++
++	dw_wr(s, DW_SSIENR, 1);
++
++	/* Wait until every queued frame has been shifted out. */
++	ret = dw_wait(s, DW_SR_TFE, DW_SR_TFE);
++	if (!ret)
++		ret = dw_wait(s, DW_SR_BUSY, 0);
++
++	dw_wr(s, DW_SSIENR, 0);
++	return ret;
++}
++
++static int rtl_sheipa_adjust_op_size(struct spi_mem *mem, struct spi_mem_op *op)
++{
++	if (op->data.dir == SPI_MEM_DATA_IN && op->data.nbytes > DW_RX_CHUNK)
++		op->data.nbytes = DW_RX_CHUNK;
++	else if (op->data.nbytes > DW_TX_CHUNK)
++		op->data.nbytes = DW_TX_CHUNK;
++	return 0;
++}
++
++static int rtl_sheipa_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
++{
++	struct rtl_sheipa *s = spi_controller_get_devdata(mem->spi->controller);
++	unsigned int cs = spi_get_chipselect(mem->spi, 0);
++
++	if (op->cmd.buswidth != 1 || op->addr.buswidth > 1 ||
++	    op->dummy.buswidth > 1 || op->data.buswidth > 1)
++		return -EOPNOTSUPP;
++
++	if (op->data.dir == SPI_MEM_DATA_IN)
++		return rtl_sheipa_read_op(s, cs, op->cmd.opcode, op->addr.val,
++					  op->addr.nbytes, op->dummy.nbytes,
++					  op->data.buf.in, op->data.nbytes);
++
++	/* Data-out (page program) and no-data (write-enable, erase). */
++	if (op->dummy.nbytes)
++		return -EOPNOTSUPP;
++	return rtl_sheipa_write_op(s, cs, op->cmd.opcode, op->addr.val,
++				   op->addr.nbytes,
++				   op->data.dir == SPI_MEM_DATA_OUT ? op->data.buf.out : NULL,
++				   op->data.dir == SPI_MEM_DATA_OUT ? op->data.nbytes : 0);
++}
++
++static const struct spi_controller_mem_ops rtl_sheipa_mem_ops = {
++	.adjust_op_size = rtl_sheipa_adjust_op_size,
++	.exec_op = rtl_sheipa_exec_op,
++};
++
++static int rtl_sheipa_probe(struct platform_device *pdev)
++{
++	struct spi_controller *ctlr;
++	struct rtl_sheipa *s;
++
++	ctlr = devm_spi_alloc_host(&pdev->dev, sizeof(*s));
++	if (!ctlr)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, ctlr);
++	s = spi_controller_get_devdata(ctlr);
++
++	s->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(s->base))
++		return PTR_ERR(s->base);
++
++	dw_wr(s, DW_SSIENR, 0);
++
++	ctlr->dev.of_node = pdev->dev.of_node;
++	ctlr->bus_num = -1;
++	ctlr->num_chipselect = 1;
++	ctlr->mode_bits = SPI_CPOL | SPI_CPHA;
++	ctlr->mem_ops = &rtl_sheipa_mem_ops;
++
++	dev_info(&pdev->dev, "Realtek RTL8197F sheipa SPI flash controller\n");
++
++	return devm_spi_register_controller(&pdev->dev, ctlr);
++}
++
++static const struct of_device_id rtl_sheipa_of_match[] = {
++	{ .compatible = "realtek,rtl8197f-sheipa-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, rtl_sheipa_of_match);
++
++static struct platform_driver rtl_sheipa_driver = {
++	.probe = rtl_sheipa_probe,
++	.driver = {
++		.name = "spi-realtek-sheipa",
++		.of_match_table = rtl_sheipa_of_match,
++	},
++};
++module_platform_driver(rtl_sheipa_driver);
++
++MODULE_DESCRIPTION("Realtek RTL8197F sheipa SPI flash controller");
++MODULE_LICENSE("GPL");

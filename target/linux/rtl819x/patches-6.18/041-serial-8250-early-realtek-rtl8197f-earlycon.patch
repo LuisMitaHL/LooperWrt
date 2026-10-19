@@ -1,0 +1,50 @@
+--- a/drivers/tty/serial/8250/8250_early.c
++++ b/drivers/tty/serial/8250/8250_early.c
+@@ -170,6 +170,47 @@
+ 	device->con->read = early_serial8250_read;
+ 	return 0;
+ }
++/*
++ * Realtek RTL8197F: the RX/TX data register is at 0x24 (register 9), not the
++ * standard 0x00. init_port() only touches control/latch registers, which are
++ * standard, so it works unchanged; only the character output has to target the
++ * relocated data register. DLAB is always clear while transmitting, so no
++ * disambiguation is needed here.
++ */
++static void __init rtl8197f_early_putc(struct uart_port *port, unsigned char c)
++{
++	unsigned int status;
++
++	writel(c, port->membase + (9 << port->regshift));
++	for (;;) {
++		status = serial8250_early_in(port, UART_LSR);
++		if (uart_lsr_tx_empty(status))
++			break;
++		cpu_relax();
++	}
++}
++
++static void __init rtl8197f_early_write(struct console *console,
++				       const char *s, unsigned int count)
++{
++	struct earlycon_device *device = console->data;
++
++	uart_console_write(&device->port, s, count, rtl8197f_early_putc);
++}
++
++static int __init rtl8197f_early_setup(struct earlycon_device *device,
++				       const char *options)
++{
++	int ret = early_serial8250_setup(device, options);
++
++	if (ret)
++		return ret;
++
++	device->con->write = rtl8197f_early_write;
++	return 0;
++}
++OF_EARLYCON_DECLARE(rtl8197f, "realtek,rtl8197f-uart", rtl8197f_early_setup);
++
+ EARLYCON_DECLARE(uart8250, early_serial8250_setup);
+ EARLYCON_DECLARE(uart, early_serial8250_setup);
+ OF_EARLYCON_DECLARE(ns16550, "ns16550", early_serial8250_setup);

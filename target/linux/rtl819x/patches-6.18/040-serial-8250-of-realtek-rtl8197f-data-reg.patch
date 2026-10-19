@@ -1,0 +1,62 @@
+--- a/drivers/tty/serial/8250/8250_of.c
++++ b/drivers/tty/serial/8250/8250_of.c
+@@ -61,6 +61,35 @@
+ 	return 0;
+ }
+ 
++/*
++ * Realtek RTL8197F: the RX/TX data register sits at offset 0x24 (register 9)
++ * instead of the standard 0x00. Everything else, including the DLL/DLM divisor
++ * latch at 0x00/0x04, LCR and LSR, is at the usual reg-shift-2 offset. Register
++ * 0 is therefore shared between DLL (DLAB set) and nothing at all (DLAB clear),
++ * so a stock 8250 writes characters straight into the divisor latch and garbles
++ * the console. Route offset 0 by the live DLAB bit: data goes to register 9,
++ * divisor programming still lands on the standard latch.
++ */
++#define RTL8197F_UART_DATA_REG 9
++
++static unsigned int rtl8197f_serial_in(struct uart_port *p, unsigned int offset)
++{
++	if (offset == UART_RX &&
++	    !(readl(p->membase + (UART_LCR << p->regshift)) & UART_LCR_DLAB))
++		offset = RTL8197F_UART_DATA_REG;
++
++	return readl(p->membase + (offset << p->regshift));
++}
++
++static void rtl8197f_serial_out(struct uart_port *p, unsigned int offset, u32 value)
++{
++	if (offset == UART_TX &&
++	    !(readl(p->membase + (UART_LCR << p->regshift)) & UART_LCR_DLAB))
++		offset = RTL8197F_UART_DATA_REG;
++
++	writel(value, p->membase + (offset << p->regshift));
++}
++
+ static inline struct of_serial_info *clk_nb_to_info(struct notifier_block *nb)
+ {
+ 	return container_of(nb, struct of_serial_info, clk_notifier);
+@@ -150,6 +179,15 @@
+ 	if (of_device_is_compatible(np, "mrvl,mmp-uart"))
+ 		port->regshift = 2;
+ 
++	/*
++	 * These are applied after serial8250_set_defaults() in
++	 * serial8250_register_8250_port(), so they survive set_io_from_upio().
++	 */
++	if (of_device_is_compatible(np, "realtek,rtl8197f-uart")) {
++		port->serial_in = rtl8197f_serial_in;
++		port->serial_out = rtl8197f_serial_out;
++	}
++
+ 	info->rst = devm_reset_control_get_optional_shared(&ofdev->dev, NULL);
+ 	if (IS_ERR(info->rst)) {
+ 		ret = PTR_ERR(info->rst);
+@@ -353,6 +391,7 @@
+ 	{ .compatible = "ti,da830-uart", .data = (void *)PORT_DA830, },
+ 	{ .compatible = "nuvoton,wpcm450-uart", .data = (void *)PORT_NPCM, },
+ 	{ .compatible = "nuvoton,npcm750-uart", .data = (void *)PORT_NPCM, },
++	{ .compatible = "realtek,rtl8197f-uart", .data = (void *)PORT_16550A, },
+ 	{ /* end of list */ },
+ };
+ MODULE_DEVICE_TABLE(of, of_platform_serial_table);

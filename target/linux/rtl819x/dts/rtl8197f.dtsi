@@ -1,0 +1,196 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "realtek,rtl8197f";
+	/*
+	 * No global interrupt-parent: cpuintc is the root MIPS CPU controller
+	 * and must have no parent, otherwise it inherits ictl and of_irq_init
+	 * mis-orders (or cycles) the controllers, leaving the CP0 timer IRQ
+	 * unmapped. Peripherals name &ictl explicitly.
+	 */
+
+	aliases {
+		serial0 = &serial0;
+		spi0 = &spi0;
+	};
+
+	chosen {
+		/*
+		 * CONFIG_MIPS_CMDLINE_FROM_DTB uses this bootargs verbatim. Bare
+		 * "earlycon" activates the stdout-path node's earlycon (the
+		 * RTL8197F quirked one), giving clean output from the very first
+		 * kernel message; console=ttyS0,38400 hands over to the full
+		 * 8250_of port once it registers.
+		 */
+		bootargs = "earlycon console=ttyS0,38400";
+		stdout-path = "serial0:38400n8";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "mips,mips24Kc";
+			reg = <0>;
+		};
+	};
+
+	clocks {
+		uart_clk: uart-clock {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			/*
+			 * Measured, not guessed: the loader read the divisor the
+			 * bootloader programmed for its clean 38400 console and it
+			 * is 162 (0xa2). 162 * 16 * 38400 = 99532800, so the UART
+			 * reference is ~99.53 MHz. Using this exact value makes the
+			 * kernel's 8250 compute divisor 162 -- identical to the
+			 * bootloader -- instead of 163 (from the scaffold's 100 MHz),
+			 * which garbled the console.
+			 */
+			clock-frequency = <99532800>;
+		};
+
+		spic_clk: spic-clock {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <200000000>;
+		};
+	};
+
+	cpuintc: interrupt-controller {
+		compatible = "mti,cpu-interrupt-controller";
+		interrupt-controller;
+		#address-cells = <0>;
+		#interrupt-cells = <1>;
+	};
+
+	ictl: interrupt-controller@18003000 {
+		compatible = "realtek,rtl8197f-ictl";
+		reg = <0x18003000 0x38>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		/*
+		 * No cascade parent yet: the CP0 timer is routed to MIPS CPU IP2
+		 * (IntCtl IPTI reads 2), so the peripheral controller cannot also
+		 * cascade on IP2. Its real CPU IP is still unconfirmed; until then
+		 * the ictl registers standalone (peripheral IRQs inactive) so the
+		 * timer can claim IP2 and the kernel boots. Console output is via
+		 * polled early_printk / 8250 TX and does not need the ictl IRQ.
+		 */
+	};
+
+	serial0: serial@18147000 {
+		/*
+		 * 16550A whose RX/TX data register is at 0x24, not 0x00 (the
+		 * divisor latch keeps 0x00). Needs the 8250_of quirk; plain
+		 * ns16550a writes characters into the divisor latch.
+		 */
+		compatible = "realtek,rtl8197f-uart";
+		reg = <0x18147000 0x100>;
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		clock-frequency = <99532800>;
+		/*
+		 * No interrupt on purpose: the ictl cascade is not wired up yet
+		 * (only the CP0 timer on IP7 works), so the UART IRQ never fires
+		 * and the interrupt-driven TTY TX/RX path stalls -- writes to
+		 * /dev/ttyS0 are queued but never transmitted (the polled printk
+		 * console still works, which masked this). With no "interrupts"
+		 * property the 8250 core falls back to timer polling, so the
+		 * interactive login console on ttyS0 works. Restore the IRQ once
+		 * the ictl peripheral cascade is enabled (also needed for eth).
+		 */
+		status = "okay";
+	};
+
+	spi0: spi@18143000 {
+		/*
+		 * RTL8197F flash controller: a Synopsys DesignWare SSI
+		 * (BSP_SPIC_BASE = 0x18143000). The boot SPI-NOR hangs off this.
+		 */
+		compatible = "realtek,rtl8197f-sheipa-spi";
+		reg = <0x18143000 0x1000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		flash@0 {
+			compatible = "jedec,spi-nor";
+			reg = <0>;
+			spi-max-frequency = <18000000>;
+			/* Board DTS must provide fixed partitions. */
+		};
+	};
+
+	pcie: pcie@18b00000 {
+		/*
+		 * Single-lane root port. reg order is what the driver expects:
+		 * root-port config, root-port extended block (MDIO/PHY power),
+		 * downstream device config, and the system register window it
+		 * shares with the ethernet for clocks, PERST# and the ictl.
+		 *
+		 * All four INTx lines collapse onto one SoC interrupt, which the
+		 * BSP routes to CPU IP5 -- like the switch core on IP4, it does
+		 * not go through the ictl cascade.
+		 */
+		compatible = "realtek,rtl8197f-pcie";
+		reg = <0x18b00000 0x1000>,
+		      <0x18b01000 0x1000>,
+		      <0x18b10000 0x1000>,
+		      <0x18000000 0x4000>;
+		device_type = "pci";
+		bus-range = <0x00 0x01>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+		/*
+		 * MEM only. The SoC also decodes a 2 MB PCIe IO window at
+		 * 0x18c00000, but the PCI core caps IO space at 64 KB, so
+		 * advertising it just collides with ioport_resource and fails
+		 * the probe. The Wi-Fi endpoint uses MMIO BARs anyway.
+		 */
+		ranges = <0x02000000 0 0x19000000 0x19000000 0 0x00c00000>;
+		#interrupt-cells = <1>;
+		interrupt-map-mask = <0 0 0 0>;
+		interrupt-map = <0 0 0 0 &cpuintc 5>;
+		status = "okay";
+	};
+
+	wifi2g: wifi@18640000 {
+		/*
+		 * Integrated RTL8197F 2.4 GHz 2x2 MAC. CPU IP6 is the BSP's
+		 * direct WLAN interrupt. The diagnostic driver deliberately
+		 * leaves the clock, reset and RF blocks untouched.
+		 */
+		compatible = "realtek,rtl8197f-wifi";
+		reg = <0x18640000 0x10000>;
+		interrupt-parent = <&cpuintc>;
+		interrupts = <6>;
+		status = "disabled";
+	};
+
+	eth0: ethernet@18010000 {
+		/*
+		 * RTL8197F on-SoC CPU network engine (swNic): a descriptor-ring
+		 * DMA engine at CPU_IFACE_BASE 0x18010000 bound to the internal
+		 * 5-port switch CPU port.
+		 *
+		 * The switch core does not need the ictl cascade: the Realtek
+		 * BSP routes it (GISR source 15, SW_IP) straight to a CPU IP via
+		 * the ictl routing register IRR1 and treats it as a plain CPU
+		 * interrupt (BSP_SWCORE_IRQ = BSP_IRQ_CPU_BASE + 4). The driver
+		 * programs that routing; this only names the resulting CPU IP.
+		 */
+		compatible = "realtek,rtl8197f-eth";
+		reg = <0x18010000 0x200>;
+		interrupt-parent = <&cpuintc>;
+		interrupts = <4>;
+		status = "okay";
+	};
+};

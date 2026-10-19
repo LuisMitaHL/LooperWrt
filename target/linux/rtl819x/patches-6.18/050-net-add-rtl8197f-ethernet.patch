@@ -1,0 +1,20 @@
+--- a/drivers/net/ethernet/realtek/Kconfig
++++ b/drivers/net/ethernet/realtek/Kconfig
+@@ -143 +143,10 @@
+ endif # NET_VENDOR_REALTEK
++
++config RTL8197F_ETH
++	tristate "Realtek RTL8197F CPU NIC (swNic) support"
++	depends on MACH_REALTEK_RTL819X || COMPILE_TEST
++	select PHYLIB
++	help
++	  Polled driver for the on-SoC CPU network engine of the Realtek
++	  RTL8197F home-router SoC and its internal switch CPU port.
++
+--- a/drivers/net/ethernet/Makefile
++++ b/drivers/net/ethernet/Makefile
+@@ -108,3 +108,4 @@ obj-$(CONFIG_NET_VENDOR_XIRCOM) += xircom
+ obj-$(CONFIG_NET_VENDOR_SYNOPSYS) += synopsys/
+ obj-$(CONFIG_NET_VENDOR_PENSANDO) += pensando/
+ obj-$(CONFIG_OA_TC6) += oa_tc6.o
++obj-$(CONFIG_RTL8197F_ETH) += realtek/rtl8197f_eth.o

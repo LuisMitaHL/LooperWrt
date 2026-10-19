@@ -1,0 +1,210 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+
+/dts-v1/;
+
+#include "rtl8197f.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	model = "Knup KP-RW407/AX";
+	compatible = "knup,rw407", "realtek,rtl8197f";
+
+	memory@0 {
+		device_type = "memory";
+		/* 128 MB DDR2-533, reported by the stock boot log. */
+		reg = <0x00000000 0x08000000>;
+	};
+
+	/*
+	 * SoC GPIO, ports A-D bank (PABCD) of the RTL8197F GPIO block at
+	 * 0x18003500: data reg +0x0c, direction reg +0x08 (1 = output).
+	 * Generic memory-mapped GPIO (bcm6345 flavour) suffices because the
+	 * bootloader already muxes the two SMI pins to GPIO function (pin 18 =
+	 * portC.2 = SMI clock, pin 19 = portC.3 = SMI data). gpio N == bit N.
+	 * The status LEDs are wired to gpio 33 (green) and gpio 57 (red), which
+	 * live outside this 32-pin bank and are not modelled yet.
+	 */
+	gpio: gpio@1800350c {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x1800350c 0x4>, <0x18003508 0x4>;
+		reg-names = "dat", "dirout";
+		gpio-controller;
+		#gpio-cells = <2>;
+		ngpios = <32>;
+	};
+
+	/*
+	 * External Realtek RTL8367RB-VB (chip id 0x6367, ver 0x0020) carrying all
+	 * physical LAN/WAN ports. Managed over the bit-banged SMI (mdc = gpio 18,
+	 * mdio = gpio 19); mainline rtl8365mb recognises this chip and does the
+	 * full init (jam table, extint RGMII with delay, CPU port, VLAN).
+	 * Port map from the stock configuration: WAN = PHY 0, LAN1-4 = PHY 1-4;
+	 * the SoC MAC reaches the switch over extension interface 1.
+	 */
+	switch {
+		compatible = "realtek,rtl8365mb";
+		mdc-gpios = <&gpio 18 GPIO_ACTIVE_HIGH>;
+		mdio-gpios = <&gpio 19 GPIO_ACTIVE_HIGH>;
+
+		ethernet-ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ethernet-port@0 {
+				reg = <0>;
+				label = "wan";
+				phy-handle = <&ethphy0>;
+			};
+			ethernet-port@1 {
+				reg = <1>;
+				label = "lan1";
+				phy-handle = <&ethphy1>;
+			};
+			ethernet-port@2 {
+				reg = <2>;
+				label = "lan2";
+				phy-handle = <&ethphy2>;
+			};
+			ethernet-port@3 {
+				reg = <3>;
+				label = "lan3";
+				phy-handle = <&ethphy3>;
+			};
+			ethernet-port@4 {
+				reg = <4>;
+				label = "lan4";
+				phy-handle = <&ethphy4>;
+			};
+			ethernet-port@6 {
+				reg = <6>;
+				ethernet = <&eth0>;
+				phy-mode = "rgmii";
+				rx-internal-delay-ps = <1500>;
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+		};
+
+		mdio {
+			compatible = "realtek,smi-mdio";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ethphy0: ethernet-phy@0 {
+				reg = <0>;
+			};
+			ethphy1: ethernet-phy@1 {
+				reg = <1>;
+			};
+			ethphy2: ethernet-phy@2 {
+				reg = <2>;
+			};
+			ethphy3: ethernet-phy@3 {
+				reg = <3>;
+			};
+			ethphy4: ethernet-phy@4 {
+				reg = <4>;
+			};
+		};
+	};
+};
+
+&{/chosen} {
+	/*
+	 * mtdblock2 = "rootfs": the fixed partition table below puts bootloader at
+	 * 0, kernel at 1 and rootfs at 2.
+	 */
+	bootargs = "earlycon console=ttyS0,38400 root=/dev/mtdblock2 rootfstype=squashfs rootwait";
+};
+
+&spi0 {
+	status = "okay";
+
+	flash@0 {
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/*
+			 * 0x0-0x20000 stage-1 bootcode, 0x20000-0x30000 factory
+			 * calibration block with the two apmib config sectors at
+			 * 0x24000 (defaults) and 0x2a000 (current). Never write
+			 * this region.
+			 */
+			partition@0 {
+				label = "bootloader";
+				reg = <0x00000000 0x00030000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_lan: mac-address@20007 {
+						reg = <0x00020007 0x6>;
+					};
+
+					macaddr_wan: mac-address@2000d {
+						reg = <0x0002000d 0x6>;
+					};
+
+					macaddr_wifi5: mac-address@20013 {
+						reg = <0x00020013 0x6>;
+					};
+
+					macaddr_wifi24: mac-address@209d6 {
+						reg = <0x000209d6 0x6>;
+					};
+				};
+			};
+
+			/*
+			 * Vendor layout: cvimg kernel container at 0x30000,
+			 * squashfs at 0x260000.
+			 */
+			partition@30000 {
+				label = "kernel";
+				reg = <0x00030000 0x00230000>;
+			};
+
+			partition@260000 {
+				label = "rootfs";
+				reg = <0x00260000 0x005a0000>;
+			};
+		};
+	};
+};
+
+&eth0 {
+	nvmem-cells = <&macaddr_lan>;
+	nvmem-cell-names = "mac-address";
+};
+
+&wifi2g {
+	/* Vendor rtl8192cd driver not ported yet. */
+	status = "disabled";
+};
+
+&pcie {
+	pcie@0,0 {
+		reg = <0x0000 0 0 0 0>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * RTL8812BRH: RTL8822B/JGR3 silicon, driven by mainline rtw88.
+		 * The efuse is populated (per-channel TX power for both paths), so
+		 * no vendor calibration blob is wired in.
+		 */
+		wifi@0,0 {
+			compatible = "pci10ec,b822";
+			reg = <0x0000 0 0 0 0>;
+			ieee80211-freq-limit = <5000000 6000000>;
+		};
+	};
+};

@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+
+START=96
+
+boot() {
+	. /lib/functions.sh
+
+	[ "$(board_name)" = "knup,rw407" ] || return 0
+	ubus -t 20 wait_for network.interface.lan >/dev/null 2>&1 && return 0
+
+	logger -t rw407-network-recovery \
+		"LAN config unavailable after overlay setup; restarting network"
+	/etc/init.d/network restart
+}

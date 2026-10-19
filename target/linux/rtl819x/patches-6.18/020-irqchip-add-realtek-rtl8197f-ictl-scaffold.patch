@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenWrt RTL8197F scaffold <noreply@example.invalid>
+Date: Tue, 7 Jul 2026 00:00:00 +0900
+Subject: [PATCH] irqchip: add Realtek RTL8197F ICTL scaffold
+
+Add a minimal irqchip driver scaffold for the RTL8197F interrupt controller.
+Routing constants are intentionally left as TODOs until the kernel 6.x binding
+is finalized.
+
+---
+ drivers/irqchip/Kconfig                |   6 +
+ drivers/irqchip/Makefile               |   1 +
+ drivers/irqchip/irq-realtek-rtl8197f.c | 166 +++++++++++++++++++++++++
+ 3 files changed, 173 insertions(+)
+ create mode 100644 drivers/irqchip/irq-realtek-rtl8197f.c
+
+--- a/drivers/irqchip/Kconfig
++++ b/drivers/irqchip/Kconfig
+@@ -230,6 +230,12 @@ config IRQ_MIPS_CPU
+ 	select GENERIC_IRQ_CHIP
+ 	select IRQ_DOMAIN
+ 
++config IRQ_REALTEK_RTL8197F
++	bool "Realtek RTL8197F interrupt controller scaffold"
++	depends on MACH_REALTEK_RTL819X
++	select IRQ_DOMAIN
++	select GENERIC_IRQ_CHIP
++
+ config CLPS711X_IRQCHIP
+ 	bool
+ 	select IRQ_DOMAIN
+--- a/drivers/irqchip/Makefile
++++ b/drivers/irqchip/Makefile
+@@ -53,6 +53,7 @@ obj-$(CONFIG_IMGPDC_IRQ)		+= irq-imgpdc.o
+ obj-$(CONFIG_IRQ_MIPS_CPU)		+= irq-mips-cpu.o
+ obj-$(CONFIG_IXP4XX_IRQ)		+= irq-ixp4xx.o
+ obj-$(CONFIG_JCORE_AIC)			+= irq-jcore-aic.o
++obj-$(CONFIG_IRQ_REALTEK_RTL8197F)	+= irq-realtek-rtl8197f.o
+ obj-$(CONFIG_RDA_INTC)			+= irq-rda-intc.o
+ obj-$(CONFIG_RENESAS_INTC_IRQPIN)	+= irq-renesas-intc-irqpin.o
+ obj-$(CONFIG_RENESAS_IRQC)		+= irq-renesas-irqc.o
+--- /dev/null
++++ b/drivers/irqchip/irq-realtek-rtl8197f.c
+@@ -0,0 +1,167 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Realtek RTL8197F interrupt controller scaffold.
++ *
++ * Physical register base is 0x18003000. Legacy SDK sources often refer to the
++ * same block through KSEG1 virtual addresses such as 0xb8003000; DT must use
++ * the physical address.
++ */
++
++#include <linux/bitops.h>
++#include <linux/io.h>
++#include <linux/irq.h>
++#include <linux/irqchip.h>
++#include <linux/irqchip/chained_irq.h>
++#include <linux/irqdomain.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/spinlock.h>
++
++#define RTL8197F_ICTL_LINES	64
++
++#define RTL8197F_GIMR		0x00
++#define RTL8197F_GISR		0x04
++#define RTL8197F_IRR0		0x08
++#define RTL8197F_IRR1		0x0c
++#define RTL8197F_IRR2		0x10
++#define RTL8197F_IRR3		0x14
++#define RTL8197F_GIMR2		0x20
++#define RTL8197F_GISR2		0x24
++#define RTL8197F_IRR4		0x28
++#define RTL8197F_IRR5		0x2c
++#define RTL8197F_IRR6		0x30
++#define RTL8197F_IRR7		0x34
++
++struct rtl8197f_ictl {
++	void __iomem *base;
++	struct irq_domain *domain;
++	raw_spinlock_t lock;
++};
++
++static void rtl8197f_ictl_mask(struct irq_data *d)
++{
++	struct rtl8197f_ictl *ictl = irq_data_get_irq_chip_data(d);
++	unsigned long flags;
++	u32 bit = d->hwirq & 31;
++	u32 reg = d->hwirq < 32 ? RTL8197F_GIMR : RTL8197F_GIMR2;
++	u32 val;
++
++	raw_spin_lock_irqsave(&ictl->lock, flags);
++	val = readl(ictl->base + reg);
++	val &= ~BIT(bit);
++	writel(val, ictl->base + reg);
++	raw_spin_unlock_irqrestore(&ictl->lock, flags);
++}
++
++static void rtl8197f_ictl_unmask(struct irq_data *d)
++{
++	struct rtl8197f_ictl *ictl = irq_data_get_irq_chip_data(d);
++	unsigned long flags;
++	u32 bit = d->hwirq & 31;
++	u32 reg = d->hwirq < 32 ? RTL8197F_GIMR : RTL8197F_GIMR2;
++	u32 val;
++
++	raw_spin_lock_irqsave(&ictl->lock, flags);
++	val = readl(ictl->base + reg);
++	val |= BIT(bit);
++	writel(val, ictl->base + reg);
++	raw_spin_unlock_irqrestore(&ictl->lock, flags);
++}
++
++static struct irq_chip rtl8197f_ictl_chip = {
++	.name = "RTL8197F-ICTL",
++	.irq_mask = rtl8197f_ictl_mask,
++	.irq_unmask = rtl8197f_ictl_unmask,
++};
++
++static int rtl8197f_ictl_map(struct irq_domain *domain, unsigned int virq,
++				     irq_hw_number_t hwirq)
++{
++	struct rtl8197f_ictl *ictl = domain->host_data;
++
++	irq_set_chip_data(virq, ictl);
++	irq_set_chip_and_handler(virq, &rtl8197f_ictl_chip, handle_level_irq);
++	irq_set_probe(virq);
++
++	return 0;
++}
++
++static const struct irq_domain_ops rtl8197f_ictl_domain_ops = {
++	.xlate = irq_domain_xlate_onecell,
++	.map = rtl8197f_ictl_map,
++};
++
++static void rtl8197f_ictl_handle_bank(struct rtl8197f_ictl *ictl,
++				      u32 status_reg, u32 mask_reg, unsigned int base)
++{
++	u32 pending = readl(ictl->base + status_reg) & readl(ictl->base + mask_reg);
++	unsigned int bit;
++
++	for (bit = 0; bit < 32; bit++) {
++		if (pending & BIT(bit))
++			generic_handle_domain_irq(ictl->domain, base + bit);
++	}
++}
++
++static void rtl8197f_ictl_chained_handle(struct irq_desc *desc)
++{
++	struct rtl8197f_ictl *ictl = irq_desc_get_handler_data(desc);
++	struct irq_chip *chip = irq_desc_get_chip(desc);
++
++	chained_irq_enter(chip, desc);
++	rtl8197f_ictl_handle_bank(ictl, RTL8197F_GISR, RTL8197F_GIMR, 0);
++	rtl8197f_ictl_handle_bank(ictl, RTL8197F_GISR2, RTL8197F_GIMR2, 32);
++	chained_irq_exit(chip, desc);
++}
++
++static void rtl8197f_ictl_init_routing(struct rtl8197f_ictl *ictl)
++{
++	/*
++	 * TODO: Move IRR0..7 route constants into DT or confirm the common
++	 * RTL8197F reset values before enabling board-specific routing here.
++	 */
++	writel(0, ictl->base + RTL8197F_GIMR);
++	writel(0, ictl->base + RTL8197F_GIMR2);
++}
++
++static int __init rtl8197f_ictl_of_init(struct device_node *node,
++					struct device_node *parent)
++{
++	struct rtl8197f_ictl *ictl;
++	int parent_irq;
++
++	ictl = kzalloc(sizeof(*ictl), GFP_KERNEL);
++	if (!ictl)
++		return -ENOMEM;
++
++	ictl->base = of_iomap(node, 0);
++	if (!ictl->base) {
++		kfree(ictl);
++		return -ENXIO;
++	}
++
++	raw_spin_lock_init(&ictl->lock);
++	rtl8197f_ictl_init_routing(ictl);
++
++	ictl->domain = irq_domain_add_linear(node, RTL8197F_ICTL_LINES,
++						 &rtl8197f_ictl_domain_ops, ictl);
++	if (!ictl->domain) {
++		iounmap(ictl->base);
++		kfree(ictl);
++		return -ENOMEM;
++	}
++
++	parent_irq = irq_of_parse_and_map(node, 0);
++	if (!parent_irq) {
++		pr_warn("rtl8197f-ictl: no cascade parent, irqchip registered without chained handler\n");
++		return 0;
++	}
++
++	irq_set_chained_handler_and_data(parent_irq,
++					     rtl8197f_ictl_chained_handle, ictl);
++
++	return 0;
++}
++
++IRQCHIP_DECLARE(rtl8197f_ictl, "realtek,rtl8197f-ictl",
++		rtl8197f_ictl_of_init);

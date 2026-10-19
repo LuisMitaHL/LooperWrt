@@ -1,0 +1,28 @@
+From: OpenWrt RTL819x porting
+Subject: [PATCH] net: dsa: realtek: use RTL8197F hardware CPU-tag format
+
+The RTL8197F MAC connected to the RTL8367RB-VB has hardware which translates
+the switch's native 4-byte CPU tag to and from swNic descriptor port metadata.
+Keep reporting RTL8_4 to DSA as the in-kernel port-selection format, but put
+the external switch into the vendor SDK's 4-byte wire format.
+
+--- a/drivers/net/dsa/realtek/rtl8365mb_main.c
++++ b/drivers/net/dsa/realtek/rtl8365mb_main.c
+@@ -2341,7 +2341,7 @@ static int rtl8365mb_change_tag_protocol(
+ 
+ 	switch (proto) {
+ 	case DSA_TAG_PROTO_RTL8_4:
+-		cpu->format = RTL8365MB_CPU_FORMAT_8BYTES;
++		cpu->format = RTL8365MB_CPU_FORMAT_4BYTES;
+ 		cpu->position = RTL8365MB_CPU_POS_AFTER_SA;
+ 		break;
+ 	case DSA_TAG_PROTO_RTL8_4T:
+@@ -2652,7 +2652,7 @@ static int rtl8365mb_detect(struct realte
+ 	mb->cpu.insert = RTL8365MB_CPU_INSERT_TO_ALL;
+ 	mb->cpu.position = RTL8365MB_CPU_POS_AFTER_SA;
+ 	mb->cpu.rx_length = RTL8365MB_CPU_RXLEN_64BYTES;
+-	mb->cpu.format = RTL8365MB_CPU_FORMAT_8BYTES;
++	mb->cpu.format = RTL8365MB_CPU_FORMAT_4BYTES;
+ 
+ 	return 0;
+ }
