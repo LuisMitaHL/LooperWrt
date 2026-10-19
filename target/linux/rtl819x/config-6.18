@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Target-level kernel knobs for the RTL8197F subtarget.
+CONFIG_DEBUG_INFO_NONE=y
+# CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT is not set
+# CONFIG_KALLSYMS_UNCOMPRESSED is not set
+# CONFIG_KALLSYMS is not set
+# CONFIG_DEBUG_FS is not set

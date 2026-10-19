@@ -119,7 +119,21 @@ define Kernel/Configure/Default
 	awk '/^(#[[:space:]]+)?CONFIG_KERNEL/{sub("CONFIG_KERNEL_","CONFIG_");print}' $(TOPDIR)/.config >> $(LINUX_DIR)/.config.target
 	echo "# CONFIG_KALLSYMS_EXTRA_PASS is not set" >> $(LINUX_DIR)/.config.target
 	echo "# CONFIG_KALLSYMS_ALL is not set" >> $(LINUX_DIR)/.config.target
+ifneq ($(CONFIG_TARGET_rtl819x),)
+# The RTL819x vendor boot slot is only 0x230000 (2240 KiB): kallsyms alone
+# costs ~250 KiB of the compressed kernel, so drop it together with the
+# debugging/tracing facilities a router does not need.  Everything else
+# (CONFIG_DEBUG_INFO_NONE) lives in target/linux/rtl819x/config-6.18.
+	echo "# CONFIG_KALLSYMS is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_KALLSYMS_UNCOMPRESSED is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_BPF_SYSCALL is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_FTRACE is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_KPROBES is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_PERF_EVENTS is not set" >> $(LINUX_DIR)/.config.target
+	echo "# CONFIG_DEBUG_FS is not set" >> $(LINUX_DIR)/.config.target
+else
 	echo "CONFIG_KALLSYMS_UNCOMPRESSED=y" >> $(LINUX_DIR)/.config.target
+endif
 	$(SCRIPT_DIR)/package-metadata.pl kconfig $(TMP_DIR)/.packageinfo $(TOPDIR)/.config $(KERNEL_PATCHVER) > $(LINUX_DIR)/.config.override
 	$(SCRIPT_DIR)/kconfig.pl 'm+' '+' $(LINUX_DIR)/.config.target /dev/null $(LINUX_DIR)/.config.override > $(LINUX_DIR)/.config.set
 	$(call Kernel/SetNoInitramfs)
