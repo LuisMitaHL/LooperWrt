@@ -1,4 +1,5 @@
 src-git looperwrt https://github.com/LuisMitaHL/LooperWrt-packages.git;main
+src-git rtw88 https://github.com/LuisMitaHL/rtw88-openwrt.git;main
 src-git mwan3nft https://github.com/dl12345/mwan3.git;openwrt-25.12
 src-git packages https://git.openwrt.org/feed/packages.git;openwrt-25.12
 src-git footstrap https://github.com/VizzleTF/luci-theme-footstrap.git;main
