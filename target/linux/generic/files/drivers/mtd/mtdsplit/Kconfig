@@ -116,6 +116,11 @@ config MTD_SPLIT_MSTC_BOOT
 	depends on MTD_SPLIT_SUPPORT
 	select MTD_SPLIT
 
+config MTD_SPLIT_RW407_FW
+	bool "RW407 firmware container parser"
+	depends on MTD_SPLIT_SUPPORT
+	select MTD_SPLIT
+
 config MTD_SPLIT_OPENWRT_PROLOG
 	bool "OpenWrt executable prolog-based parser"
 	depends on MTD_SPLIT_SUPPORT

@@ -170,17 +170,16 @@
 			};
 
 			/*
-			 * Vendor layout: cvimg kernel container at 0x30000,
-			 * squashfs at 0x260000.
+			 * Single firmware partition.  The container starts with a
+			 * cvimg loader, keeps the real rootfs at 0x230000 (flash
+			 * 0x260000) because the stock stage-2 checks it there, and
+			 * stores the kernel around it.  mtdsplit_rw407 creates
+			 * "rootfs0" and "rootfs_data".
 			 */
 			partition@30000 {
-				label = "kernel";
-				reg = <0x00030000 0x00230000>;
-			};
-
-			partition@260000 {
-				label = "rootfs";
-				reg = <0x00260000 0x005a0000>;
+				label = "firmware";
+				reg = <0x00030000 0x007d0000>;
+				compatible = "knup,rw407-firmware";
 			};
 		};
 	};

@@ -68,6 +68,27 @@ define Build/loader-kernel
 	rm -rf $@.src
 endef
 
+
+# The RW407 container: a small loader, the compressed kernel split around the
+# fixed rootfs at 0x260000, and the real rootfs.  See mkcontainer.py.
+define Build/loader-rw407
+	$(MAKE) -C ./loader clean all \
+		TOPDIR=$(TOPDIR) CROSS_COMPILE="$(TARGET_CROSS)"
+	$(CP) ./loader/loader.bin $(KDIR)/rw407-loader.bin
+endef
+
+define Build/rw407-container
+	$(call Build/loader-rw407)
+	python3 ./mkcontainer.py \
+		--loader $(KDIR)/rw407-loader.bin \
+		--kernel $(KDIR)/vmlinux \
+		--dtb $(KDIR)/image-$(firstword $(DEVICE_DTS)).dtb \
+		--rootfs $(KDIR)/root.squashfs \
+		--out $@ \
+		--load $$(python3 ./kernel-addrs.py --load $(KDIR)/vmlinux.elf) \
+		--entry $$(python3 ./kernel-addrs.py --entry $(KDIR)/vmlinux.elf)
+endef
+
 # Wrap the loader+kernel payload in the CVIMG container the stock stage-2
 # bootcode expects at flash offset 0x30000 ("cr6c": data=firmware, cpu=new).
 define Build/cvimg
@@ -93,15 +114,12 @@ define Device/knup_rw407
   DEVICE_MODEL := KP-RW407/AX
   DEVICE_DTS := rtl8197f-knup-rw407
   IMAGE_SIZE := 8000k
-  KERNEL_SIZE := 2240k
-  KERNEL := kernel-bin | append-dtb | lzma | loader-kernel $(LOADER_LOADADDR) | \
-	cvimg $(LOADER_LOADADDR)
+  KERNEL := kernel-bin | append-dtb
   KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | \
 	loader-kernel $(LOADER_LOADADDR_INITRAMFS)
   DEVICE_PACKAGES := kmod-rtw88-8822be rtl8822be-firmware wpad-basic-mbedtls
   IMAGES := sysupgrade.bin
-  IMAGE/sysupgrade.bin := append-kernel | pad-to $$(KERNEL_SIZE) | \
-	append-rootfs | rw407-rootfs | check-size | append-metadata
+  IMAGE/sysupgrade.bin := rw407-container | append-metadata
 endef
 TARGET_DEVICES += knup_rw407
 
