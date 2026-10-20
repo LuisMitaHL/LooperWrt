@@ -6,10 +6,15 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/image.mk
 
 DTS_DIR := ../dts
-# The boot code copies the cvimg payload to 0x80a00000 and jumps there, so the
-# loader must be linked for that address. The kernel load base and entry are
-# read from the built ELF at image time (see Build/loader-kernel).
+# The stock boot code copies the cvimg payload to 0x80a00000 and jumps there,
+# so the flashed image links its loader at that address. The decompressed
+# kernel ends at 0x8065e2e0, well below the loader.
+#
+# The initramfs image is linked higher: it is uploaded to RAM and jumped to
+# explicitly, and its decompressed image reaches 0x81041b97, which would
+# overwrite a loader sitting at 0x80a00000.
 LOADER_LOADADDR := 0x80a00000
+LOADER_LOADADDR_INITRAMFS := 0x85000000
 CVIMG_BURN_ADDR := 0x30000
 RAMSIZE := 0x08000000
 # The generic lzma-loader decompresses to KERNEL_ENTRY and jumps to KERNEL_ENTRY,
@@ -40,7 +45,7 @@ define Build/loader-kernel
 	# -ffunction-sections that section holds decompress.c's entry() -- jumping
 	# there would skip start.S's cache setup and pass it garbage arguments. Park
 	# _start in its own section and place that section first instead.
-	$(SED) 's/^LEAF(_start)/.section .text.start,"ax",@progbits\nLEAF(_start)/' \
+	$(SED) 's/^LEAF(_start)/.section .text.start,"ax",@progbits\nLEAF(_start)\n\tmtc0\tzero, $$12/' \
 		$@.src/start.S
 	$(SED) 's/*(.text.entry)/KEEP(*(.text.start))\n    *(.text.entry)/' \
 		$@.src/lzma.lds.in
@@ -55,7 +60,7 @@ define Build/loader-kernel
 		OBJDUMP="$(TARGET_CROSS)objdump -EL" \
 		O_FORMAT=elf32-tradlittlemips \
 		CROSS_COMPILE="$(TARGET_CROSS)" \
-		LOADADDR=$(LOADER_LOADADDR) \
+		LOADADDR=$(if $(1),$(1),$(LOADER_LOADADDR)) \
 		KERNEL_ENTRY=$$kentry \
 		RAMSIZE=$(RAMSIZE) \
 		all
@@ -67,8 +72,15 @@ endef
 # bootcode expects at flash offset 0x30000 ("cr6c": data=firmware, cpu=new).
 define Build/cvimg
 	$(STAGING_DIR_HOST)/bin/cvimg -i "$@" -o "$@.new" \
-		-e $(LOADER_LOADADDR) -b $(CVIMG_BURN_ADDR) -c new -t fw
+		-e $(if $(1),$(1),$(LOADER_LOADADDR)) -b $(CVIMG_BURN_ADDR) -c new -t fw
 	mv "$@.new" "$@"
+endef
+
+# Realtek stage-2 boot code treats the word at squashfs offset 8 (normally
+# the mkfs timestamp) as the rootfs length and verifies a 16-bit big-endian
+# checksum over len + 0x282 bytes, so wrap the rootfs before check-size.
+define Build/rw407-rootfs
+	python3 ./rw407-rootfs.py "$@"
 endef
 
 define Device/Default
@@ -82,12 +94,14 @@ define Device/knup_rw407
   DEVICE_DTS := rtl8197f-knup-rw407
   IMAGE_SIZE := 8000k
   KERNEL_SIZE := 2240k
-  KERNEL := kernel-bin | append-dtb | lzma | loader-kernel | cvimg
-  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | loader-kernel
+  KERNEL := kernel-bin | append-dtb | lzma | loader-kernel $(LOADER_LOADADDR) | \
+	cvimg $(LOADER_LOADADDR)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | \
+	loader-kernel $(LOADER_LOADADDR_INITRAMFS)
   DEVICE_PACKAGES := kmod-rtw88-8822be rtl8822be-firmware wpad-basic-mbedtls
   IMAGES := sysupgrade.bin
   IMAGE/sysupgrade.bin := append-kernel | pad-to $$(KERNEL_SIZE) | \
-	append-rootfs | pad-rootfs | check-size | append-metadata
+	append-rootfs | rw407-rootfs | check-size | append-metadata
 endef
 TARGET_DEVICES += knup_rw407
 

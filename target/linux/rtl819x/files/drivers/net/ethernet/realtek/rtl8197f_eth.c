@@ -1135,13 +1135,57 @@ static void rtl_regdump(const char *when, void __iomem *sw, void __iomem *sys)
 		readl(sys + 0x0008), readl(sys + 0x0850), readl(sys + 0x0010));
 }
 
+/*
+ * The stock stage-2 code brings the external RTL8367 up over SMI before it
+ * jumps to the kernel, but only on its Ethernet-init path; a normal flash
+ * boot skips it and the DSA driver then reads chip id 0x0000.  Replicate the
+ * minimal sequence the boot code performs:
+ *   - SYS+0x838 bit 29 (SMI pin configuration)
+ *   - pulse GPIO58 (ports E-H bit 26), the RTL8367 reset line
+ *   - SYS+0x808 = 0x660
+ *   - mux GPIO18/19 (ports A-D bits 18/19) to the GPIO function
+ */
+static void rtl_rtl8367_bringup(void __iomem *sys)
+{
+	u32 v;
+
+	v = readl(sys + 0x0838);
+	writel((v & 0x0fffffff) | 0x20000000, sys + 0x0838);
+
+	/* The bootloader reset helper (0x800030f8) clears these right after
+	 * programming port 0 and before P0GMIICR Conf_done.  On a cold flash
+	 * boot they come up as 0x10000000 / 0x01110000 and with those values
+	 * the RTL8367 EXT1 receiver never sees the SoC frames (port 6
+	 * ifInOctets stays 0).  Clearing them is what makes the SoC ->
+	 * RTL8367 direction work.
+	 */
+	writel(0, sys + 0x0800);
+	writel(0, sys + 0x0804);
+
+	v = readl(sys + 0x351c);
+	writel(v & ~(1u << 26), sys + 0x351c);
+	v = readl(sys + 0x3524);
+	writel(v | (1u << 26), sys + 0x3524);
+	v = readl(sys + 0x3528);
+	writel(v & ~(1u << 26), sys + 0x3528);
+	mdelay(100);
+	v = readl(sys + 0x3528);
+	writel(v | (1u << 26), sys + 0x3528);
+	mdelay(100);
+
+	writel(0x660, sys + 0x0808);
+	writel(readl(sys + 0x3500) & 0xfff3ffff, sys + 0x3500);
+}
+
 static int __init rtl_early_regdump(void)
 {
 	void __iomem *sw = ioremap(0x1b800000, 0x8000);
 	void __iomem *sys = ioremap(0x18000000, 0x4000);
 
-	if (sw && sys)
+	if (sw && sys) {
+		rtl_rtl8367_bringup(sys);
 		rtl_regdump("EARLY-initcall (bootloader/pre-driver state)", sw, sys);
+	}
 	if (sw)
 		iounmap(sw);
 	if (sys)

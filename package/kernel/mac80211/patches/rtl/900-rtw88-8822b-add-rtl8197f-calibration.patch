@@ -17,7 +17,7 @@
  #include <linux/module.h>
  #include "main.h"
  #include "coex.h"
-@@ -38,10 +39,144 @@ static void rtw8822bs_efuse_parsing(stru
+@@ -38,10 +39,147 @@ static void rtw8822bs_efuse_parsing(stru
  	ether_addr_copy(efuse->addr, map->s.mac_addr);
  }
  
@@ -25,8 +25,8 @@
 +#define RTL8197F_WLAN_MAC		0
 +#define RTL8197F_WLAN_XTAL		149
 +#define RTL8197F_WLAN_THERMAL		152
-+#define RTL8197F_WLAN_5G_BASE_A		163
-+#define RTL8197F_WLAN_5G_BASE_B		359
++#define RTL8197F_WLAN_5G_BASE_A		200
++#define RTL8197F_WLAN_5G_BASE_B		396
 +#define RTL8197F_WLAN_5G_HT1_A		1250
 +#define RTL8197F_WLAN_5G_HT2_A		1264
 +#define RTL8197F_WLAN_5G_VHT1_A		1320
@@ -36,10 +36,13 @@
 +#define RTL8197F_WLAN_5G_VHT1_B		1544
 +#define RTL8197F_WLAN_5G_VHT2_B		1558
 +#define RTL8197F_WLAN_5G_GROUPS		14
++#define RTL8197F_WLAN_5G_STRIDE		10
 +
-+static const u8 rtl8197f_5g_group_channel[RTL8197F_WLAN_5G_GROUPS] = {
-+	36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157, 165, 173
-+};
++/*
++ * 14 channel rows of 10 bytes each; the first byte of a row holds the base
++ * 5 GHz power index for channels 36, 44, 52, 60, 100, 108, 116, 124, 132,
++ * 140, 149, 157, 165 and 173.
++ */
 +
 +static s8 rtw8822b_rtl8197f_s4(u8 value)
 +{
@@ -108,7 +111,7 @@
 +
 +		for (i = 0; i < RTL8197F_WLAN_5G_GROUPS; i++) {
 +			u8 index = cal[base_offset[path] +
-+				       rtl8197f_5g_group_channel[i] - 1];
++				       i * RTL8197F_WLAN_5G_STRIDE];
 +
 +			if (!index || index > rtwdev->chip->max_power_index) {
 +				ret = -EINVAL;
