@@ -4,6 +4,8 @@
 
 #include "rtl8197f.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/leds/common.h>
 
 / {
 	model = "Knup KP-RW407/AX";
@@ -16,13 +18,15 @@
 	};
 
 	/*
-	 * SoC GPIO, ports A-D bank (PABCD) of the RTL8197F GPIO block at
-	 * 0x18003500: data reg +0x0c, direction reg +0x08 (1 = output).
-	 * Generic memory-mapped GPIO (bcm6345 flavour) suffices because the
-	 * bootloader already muxes the two SMI pins to GPIO function (pin 18 =
-	 * portC.2 = SMI clock, pin 19 = portC.3 = SMI data). gpio N == bit N.
-	 * The status LEDs are wired to gpio 33 (green) and gpio 57 (red), which
-	 * live outside this 32-pin bank and are not modelled yet.
+	 * SoC GPIO, ports A-D (PABCD) and E-H (PEFGH) of the RTL8197F GPIO
+	 * block at 0x18003500.  Per bank: CNR (+0x00/+0x1c, 0 = GPIO function),
+	 * DIR (+0x08/+0x24, 1 = output), DAT (+0x0c/+0x28).  gpio N is bit N
+	 * for PABCD and bit N-32 for PEFGH.
+	 *
+	 * Generic memory-mapped GPIO (bcm6345 flavour) suffices: the bootloader
+	 * already muxes the two SMI pins (18/19) and the two status LEDs (33/57)
+	 * to GPIO.  Buttons and LEDs are polled because the ictl peripheral
+	 * cascade is not wired up yet, so no GPIO IRQ is available.
 	 */
 	gpio: gpio@1800350c {
 		compatible = "brcm,bcm6345-gpio";
@@ -31,6 +35,57 @@
 		gpio-controller;
 		#gpio-cells = <2>;
 		ngpios = <32>;
+	};
+
+	gpio2: gpio@18003524 {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x18003528 0x4>, <0x18003524 0x4>;
+		reg-names = "dat", "dirout";
+		gpio-controller;
+		#gpio-cells = <2>;
+		ngpios = <32>;
+	};
+
+	/*
+	 * Front-panel bi-colour LED: gpio33 low = green, gpio57 low = red.
+	 * Both channels on gives the "white" appearance observed on stock.
+	 * gpio35/36/38 were probed and drive nothing on this board.
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		led_green: led-green {
+			gpios = <&gpio2 1 GPIO_ACTIVE_LOW>;
+			function = LED_FUNCTION_STATUS;
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "on";
+		};
+
+		led_red: led-red {
+			gpios = <&gpio2 25 GPIO_ACTIVE_LOW>;
+			function = LED_FUNCTION_STATUS;
+			color = <LED_COLOR_ID_RED>;
+			default-state = "off";
+		};
+	};
+
+	/*
+	 * Reset button on gpio54 (PEFGH bit 22), active low.  gpio-keys-polled
+	 * is required because the SoC GPIO controller has no IRQ wired yet.
+	 */
+	keys {
+		compatible = "gpio-keys-polled";
+		poll-interval = <100>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		reset {
+			label = "reset";
+			reg = <0>;
+			gpios = <&gpio2 22 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <50>;
+		};
 	};
 
 	/*

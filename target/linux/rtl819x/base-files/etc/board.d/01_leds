@@ -1,0 +1,19 @@
+#!/bin/sh
+
+. /lib/functions/leds.sh
+. /lib/functions/uci-defaults.sh
+
+board=$(board_name)
+
+board_config_update
+
+case "$board" in
+knup,rw407)
+	# Bi-colour front-panel LED: green = power, red left unconfigured.
+	ucidef_set_led_default "power" "POWER" "green:status" "1"
+	;;
+esac
+
+board_config_flush
+
+exit 0

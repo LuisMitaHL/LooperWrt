@@ -8,3 +8,11 @@ CONFIG_DEBUG_INFO_NONE=y
 # CONFIG_DEBUG_FS is not set
 
 CONFIG_MTD_SPLIT_RW407_FW=y
+
+# Front-panel LEDs and the reset button are built in: the image has no
+# package manager, so keep these out of the kmod dependency chain.
+CONFIG_LEDS_GPIO=y
+CONFIG_INPUT=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_KEYBOARD_GPIO_POLLED=y
