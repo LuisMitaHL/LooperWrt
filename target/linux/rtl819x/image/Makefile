@@ -14,6 +14,7 @@ DTS_DIR := ../dts
 # explicitly, and its decompressed image reaches 0x81041b97, which would
 # overwrite a loader sitting at 0x80a00000.
 LOADER_LOADADDR := 0x80a00000
+RW407_LOADER_BASE := 0x85000000
 LOADER_LOADADDR_INITRAMFS := 0x85000000
 CVIMG_BURN_ADDR := 0x30000
 RAMSIZE := 0x08000000
@@ -89,6 +90,23 @@ define Build/rw407-container
 		--entry $$(python3 ./kernel-addrs.py --entry $(KDIR)/vmlinux.elf)
 endef
 
+# Two-section container for the stock Realtek web uploader.  The kernel
+# section is truncated after fragment A so it fits the stock 0x230000 slot;
+# the rootfs section carries the full 0x5a0000 rootfs partition, including a
+# clean deadc0de rootfs_data marker.
+define Build/rw407-factory
+	$(call Build/loader-rw407)
+	python3 ./mkfactory.py \
+		--loader $(KDIR)/rw407-loader.bin \
+		--kernel $(KDIR)/vmlinux \
+		--dtb $(KDIR)/image-$(firstword $(DEVICE_DTS)).dtb \
+		--rootfs $(KDIR)/root.squashfs \
+		--out $@ \
+		--loader-base $(RW407_LOADER_BASE) \
+		--kernel-load $$(python3 ./kernel-addrs.py --load $(KDIR)/vmlinux.elf) \
+		--entry $$(python3 ./kernel-addrs.py --entry $(KDIR)/vmlinux.elf)
+endef
+
 # Wrap the loader+kernel payload in the CVIMG container the stock stage-2
 # bootcode expects at flash offset 0x30000 ("cr6c": data=firmware, cpu=new).
 define Build/cvimg
@@ -118,8 +136,9 @@ define Device/knup_rw407
   KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | \
 	loader-kernel $(LOADER_LOADADDR_INITRAMFS)
   DEVICE_PACKAGES := kmod-rtw88-8822be rtl8822be-firmware wpad-basic-mbedtls
-  IMAGES := sysupgrade.bin
+  IMAGES := sysupgrade.bin factory.bin
   IMAGE/sysupgrade.bin := rw407-container | append-metadata
+  IMAGE/factory.bin := rw407-factory
 endef
 TARGET_DEVICES += knup_rw407
 
