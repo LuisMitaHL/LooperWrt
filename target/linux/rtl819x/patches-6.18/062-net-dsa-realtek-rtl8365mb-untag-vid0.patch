@@ -1,0 +1,89 @@
+From: OpenWrt RTL819x porting
+Subject: [PATCH] net: dsa: realtek: untag VID 0 on the RTL8197F 4-byte-tag conduit
+
+The RTL8197F MAC forces the switch's 4-byte hardware CPU tag, which cannot
+carry the DSA tag's KEEP bit. CPU-injected frames are therefore seen as tagged
+by the switch and, because the CPU port has no PVID, classified into VID 0.
+With VLAN filtering disabled the driver selected REAL_KEEP, so every
+router-originated frame egressed with an 802.1Q priority tag (TPID 0x8100,
+VID 0) on all LAN and WAN ports.
+
+Always follow the VLAN4k untag mask (ORIGINAL) and program VID 0 as member +
+untagged on every available port. DSA reserves VID 0 and never programs it, so
+the entry does not conflict with the VLAN/MC bookkeeping; unprogrammed VIDs
+keep untag=0 and preserve tagged passthrough.
+
+Tested on a Knup KP-RW407/AX: LAN and WAN captures no longer show 0x8100 on
+router-originated unicast, broadcast or multicast; VLAN-aware bridges are
+unaffected.
+
+---
+--- a/drivers/net/dsa/realtek/rtl8365mb_main.c
++++ b/drivers/net/dsa/realtek/rtl8365mb_main.c
+@@ -1991,14 +1991,16 @@
+ 		}
+ 	}
+ 
+-	/* When VLAN filtering is disabled, preserve frames exactly as received.
+-	 * Otherwise, the VLAN egress pipeline may still alter tag state
+-	 * according to VLAN membership and untag configuration.
++	/* The RTL8197F conduit forces the 4-byte hardware CPU tag, which
++	 * cannot carry the DSA tag's KEEP bit: CPU-injected frames are seen as
++	 * tagged and, with no CPU PVID, classified into VID 0. Always follow
++	 * the VLAN4k untag mask so VID 0 can be made untagged (see
++	 * rtl8365mb_vlan_setup). With filtering enabled this is unchanged;
++	 * with filtering disabled DSA still programs the bridge VLANs, so
++	 * untagged bridge traffic keeps its format and unprogrammed VIDs keep
++	 * untag=0, preserving tagged passthrough.
+ 	 */
+-	if (vlan_filtering)
+-		mode = RTL8365MB_VLAN_EGRESS_MODE_ORIGINAL;
+-	else
+-		mode = RTL8365MB_VLAN_EGRESS_MODE_REAL_KEEP;
++	mode = RTL8365MB_VLAN_EGRESS_MODE_ORIGINAL;
+ 
+ 	ret = rtl8365mb_port_set_vlan_egress_mode(priv, port, mode);
+ 	if (ret)
+@@ -2134,9 +2136,13 @@
+  */
+ static int rtl8365mb_vlan_setup(struct dsa_switch *ds)
+ {
++	struct switchdev_obj_port_vlan vlan0 = {
++		.vid = 0,
++		.flags = BRIDGE_VLAN_INFO_UNTAGGED,
++	};
+ 	struct realtek_priv *priv = ds->priv;
+ 	struct dsa_port *dp;
+-	int ret;
++	int ret = 0;
+ 
+ 	dsa_switch_for_each_available_port(dp, ds) {
+ 		/* Disable vlan-filtering for all ports */
+@@ -2149,6 +2155,27 @@
+ 		}
+ 	}
+ 
++	/* The 4-byte hardware CPU tag cannot carry the DSA tag's KEEP bit.
++	 * Frames injected by the CPU are therefore treated as tagged and,
++	 * because the CPU port has no PVID, classified into VID 0. Program
++	 * VID 0 as member + untagged on every available port so the egress
++	 * pipeline cannot add a priority tag (802.1Q, VID 0) to them. DSA
++	 * never programs VID 0 (it is reserved), so this does not conflict
++	 * with the VLAN/MC bookkeeping.
++	 */
++	mutex_lock(&priv->vlan_lock);
++	dsa_switch_for_each_available_port(dp, ds) {
++		ret = rtl8365mb_vlan_4k_port_add(ds, dp->index, &vlan0, NULL);
++		if (ret) {
++			dev_err(priv->dev, "Failed to program VLAN 0 on port %d\n",
++				dp->index);
++			break;
++		}
++	}
++	mutex_unlock(&priv->vlan_lock);
++	if (ret)
++		return ret;
++
+ 	/* VLAN is always enabled. */
+ 	ret = regmap_update_bits(priv->map, RTL8365MB_VLAN_CTRL_REG,
+ 				 RTL8365MB_VLAN_CTRL_EN_MASK,
