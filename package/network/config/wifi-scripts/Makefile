@@ -9,11 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wifi-scripts
 PKG_VERSION:=1.0
-<<<<<<< HEAD
 PKG_RELEASE:=4
-=======
-PKG_RELEASE:=4
->>>>>>> 05180bce24 (wifi-scripts: skip board.json write when wlan detection comes up empty)
 PKG_LICENSE:=GPL-2.0
 
 PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
