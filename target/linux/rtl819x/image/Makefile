@@ -135,7 +135,7 @@ define Device/knup_rw407
   KERNEL := kernel-bin | append-dtb
   KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | \
 	loader-kernel $(LOADER_LOADADDR_INITRAMFS)
-  DEVICE_PACKAGES := kmod-rtw88-8822be rtl8822be-firmware wpad-basic-mbedtls
+  DEVICE_PACKAGES := kmod-rtw88-8822be rtl8822be-firmware wpad-mbedtls
   IMAGES := sysupgrade.bin factory.bin
   IMAGE/sysupgrade.bin := rw407-container | append-metadata
   IMAGE/factory.bin := rw407-factory
