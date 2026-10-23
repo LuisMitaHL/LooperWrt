@@ -57,17 +57,7 @@ channel-switch series, none of which is upstream.
  	int (*setup)(struct rtw_dev *rtwdev);
 --- a/drivers/net/wireless/realtek/rtw88/pci.c
 +++ b/drivers/net/wireless/realtek/rtw88/pci.c
-@@ -825,7 +825,8 @@
- 
- 	pkt_desc = skb_push(skb, chip->tx_pkt_desc_sz);
- 	memset(pkt_desc, 0, tx_pkt_desc_sz);
--	pkt_info->qsel = rtw_pci_get_tx_qsel(skb, queue);
-+	if (!pkt_info->qsel)
-+		pkt_info->qsel = rtw_pci_get_tx_qsel(skb, queue);
- 	rtw_tx_fill_tx_desc(rtwdev, pkt_info, skb);
- 	dma = dma_map_single(&rtwpci->pdev->dev, skb->data, skb->len,
- 			     DMA_TO_DEVICE);
-@@ -938,6 +939,33 @@
+@@ -938,6 +938,33 @@
  	return 0;
  }
  
@@ -101,7 +91,7 @@ channel-switch series, none of which is upstream.
  static void rtw_pci_tx_isr(struct rtw_dev *rtwdev, struct rtw_pci *rtwpci,
  			   u8 hw_queue)
  {
-@@ -1604,6 +1632,7 @@
+@@ -1604,6 +1631,7 @@
  
  static const struct rtw_hci_ops rtw_pci_ops = {
  	.tx_write = rtw_pci_tx_write,
