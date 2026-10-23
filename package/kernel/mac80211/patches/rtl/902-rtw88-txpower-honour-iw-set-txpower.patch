@@ -1,0 +1,209 @@
+diff --git a/drivers/net/wireless/realtek/rtw88/debug.c b/drivers/net/wireless/realtek/rtw88/debug.c
+index d1104a8..dfd96fa 100644
+--- a/drivers/net/wireless/realtek/rtw88/debug.c
++++ b/drivers/net/wireless/realtek/rtw88/debug.c
+@@ -706,8 +706,8 @@ static int rtw_debugfs_get_tx_pwr_tbl(struct seq_file *m, void *v)
+ 	seq_printf(m, "channel: %u\n", ch);
+ 	seq_printf(m, "bandwidth: %u\n", bw);
+ 	seq_printf(m, "regulatory: %s\n", rtw_get_regd_string(regd));
+-	seq_printf(m, "%-4s %-10s %-9s %-9s (%-4s %-4s %-4s) %-4s\n",
+-		   "path", "rate", "pwr", "base", "byr", "lmt", "sar", "rem");
++	seq_printf(m, "%-4s %-10s %-9s %-9s (%-4s %-4s %-4s %-4s) %-4s\n",
++		   "path", "rate", "pwr", "base", "byr", "lmt", "sar", "usr", "rem");
+ 
+ 	max_ht_rate = DESC_RATEMCS0 + nss * 8 - 1;
+ 
+@@ -733,15 +733,16 @@ static int rtw_debugfs_get_tx_pwr_tbl(struct seq_file *m, void *v)
+ 
+ 			seq_printf(m, "%4c ", path + 'A');
+ 			rtw_print_rate(m, rate);
+-			seq_printf(m, " %3u(0x%02x) %4u %4d (%4d %4d %4d) %4d\n",
++			seq_printf(m, " %3u(0x%02x) %4u %4d (%4d %4d %4d %4d) %4d\n",
+ 				   hal->tx_pwr_tbl[path][rate],
+ 				   hal->tx_pwr_tbl[path][rate],
+ 				   pwr_param.pwr_base,
+-				   min3(pwr_param.pwr_offset,
+-					pwr_param.pwr_limit,
+-					pwr_param.pwr_sar),
++				   min(min(min(pwr_param.pwr_offset,
++					       pwr_param.pwr_limit),
++					   pwr_param.pwr_sar),
++				       pwr_param.pwr_user),
+ 				   pwr_param.pwr_offset, pwr_param.pwr_limit,
+-				   pwr_param.pwr_sar,
++				   pwr_param.pwr_sar, pwr_param.pwr_user,
+ 				   pwr_param.pwr_remnant);
+ 		}
+ 	}
+diff --git a/drivers/net/wireless/realtek/rtw88/mac80211.c b/drivers/net/wireless/realtek/rtw88/mac80211.c
+index 766f22d..7f61497 100644
+--- a/drivers/net/wireless/realtek/rtw88/mac80211.c
++++ b/drivers/net/wireless/realtek/rtw88/mac80211.c
+@@ -6,6 +6,7 @@
+ #include "sec.h"
+ #include "tx.h"
+ #include "fw.h"
++#include "phy.h"
+ #include "mac.h"
+ #include "coex.h"
+ #include "ps.h"
+@@ -71,6 +72,24 @@ static void rtw_ops_stop(struct ieee80211_hw *hw, bool suspend)
+ 	mutex_unlock(&rtwdev->mutex);
+ }
+ 
++/*
++ * Apply a TX power cap from mac80211. Must be called with rtwdev->mutex held.
++ * dbm is the effective total: mac80211 already took min(regulatory, user, ap),
++ * so this is correct for NL80211_TX_POWER_FIXED and _LIMITED alike, and is a
++ * no-op (equals the regulatory max) when no user request is active.
++ */
++static void rtw_set_tx_power(struct rtw_dev *rtwdev, int dbm)
++{
++	struct rtw_hal *hal = &rtwdev->hal;
++
++	if (dbm == INT_MIN)
++		return;
++
++	hal->txpwr_cap_set = true;
++	hal->txpwr_cap_dbm = dbm;
++	rtw_phy_set_tx_power_level(rtwdev, hal->current_channel);
++}
++
+ static int rtw_ops_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
+ {
+ 	struct rtw_dev *rtwdev = hw->priv;
+@@ -94,6 +113,8 @@ static int rtw_ops_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
+ 
+ 	if (changed & IEEE80211_CONF_CHANGE_CHANNEL)
+ 		rtw_set_channel(rtwdev);
++	else if (changed & IEEE80211_CONF_CHANGE_POWER)
++		rtw_set_tx_power(rtwdev, rtwdev->hw->conf.power_level);
+ 
+ 	if ((changed & IEEE80211_CONF_CHANGE_IDLE) &&
+ 	    (hw->conf.flags & IEEE80211_CONF_IDLE) &&
+@@ -454,6 +475,9 @@ static void rtw_ops_bss_info_changed(struct ieee80211_hw *hw,
+ 	if (changed & BSS_CHANGED_PS)
+ 		rtw_recalc_lps(rtwdev, NULL);
+ 
++	if (changed & BSS_CHANGED_TXPOWER)
++		rtw_set_tx_power(rtwdev, conf->txpower);
++
+ 	rtw_vif_port_config(rtwdev, rtwvif, config);
+ 
+ 	mutex_unlock(&rtwdev->mutex);
+@@ -944,6 +968,21 @@ static void rtw_ops_sta_rc_update(struct ieee80211_hw *hw,
+ 		ieee80211_queue_work(rtwdev->hw, &si->rc_work);
+ }
+ 
++static int rtw_ops_get_txpower(struct ieee80211_hw *hw,
++			       struct ieee80211_vif *vif,
++			       unsigned int link_id, int *dbm)
++{
++	struct rtw_dev *rtwdev = hw->priv;
++	struct rtw_hal *hal = &rtwdev->hal;
++
++	if (hal->txpwr_cap_set)
++		*dbm = hal->txpwr_cap_dbm;
++	else
++		*dbm = hal->tx_pwr_tbl[0][DESC_RATE6M] >> rtwdev->chip->txgi_factor;
++
++	return 0;
++}
++
+ const struct ieee80211_ops rtw_ops = {
+ 	.add_chanctx = ieee80211_emulate_add_chanctx,
+ 	.remove_chanctx = ieee80211_emulate_remove_chanctx,
+@@ -965,6 +1004,7 @@ const struct ieee80211_ops rtw_ops = {
+ 	.sta_add		= rtw_ops_sta_add,
+ 	.sta_remove		= rtw_ops_sta_remove,
+ 	.set_tim		= rtw_ops_set_tim,
++	.get_txpower		= rtw_ops_get_txpower,
+ 	.set_key		= rtw_ops_set_key,
+ 	.ampdu_action		= rtw_ops_ampdu_action,
+ 	.can_aggregate_in_amsdu	= rtw_ops_can_aggregate_in_amsdu,
+diff --git a/drivers/net/wireless/realtek/rtw88/main.h b/drivers/net/wireless/realtek/rtw88/main.h
+index 9c0b746..de6dde1 100644
+--- a/drivers/net/wireless/realtek/rtw88/main.h
++++ b/drivers/net/wireless/realtek/rtw88/main.h
+@@ -2016,6 +2016,10 @@ struct rtw_hal {
+ 	s8 tx_pwr_tbl[RTW_RF_PATH_MAX]
+ 		     [DESC_RATE_MAX];
+ 
++	/* ---- TX power cap (nl80211 / iw set txpower) ---- */
++	bool txpwr_cap_set;         /* false until first mac80211 txpower notification */
++	s32  txpwr_cap_dbm;         /* mac80211-resolved effective cap, total power (dBm) */
++
+ 	enum rtw_sar_bands sar_band;
+ 	struct rtw_sar sar;
+ 
+diff --git a/drivers/net/wireless/realtek/rtw88/phy.c b/drivers/net/wireless/realtek/rtw88/phy.c
+index e2ac5c6..f269cf0 100644
+--- a/drivers/net/wireless/realtek/rtw88/phy.c
++++ b/drivers/net/wireless/realtek/rtw88/phy.c
+@@ -2236,6 +2236,30 @@ err:
+ 	return (s8)rtwdev->chip->max_power_index;
+ }
+ 
++static s8 rtw_phy_get_user_tx_power_limit(struct rtw_dev *rtwdev, u8 band,
++					  u8 path, u8 rate)
++{
++	struct rtw_hal *hal = &rtwdev->hal;
++	const struct rtw_chip_info *chip = rtwdev->chip;
++	static const u8 path_share_dbm[] = { 0, 0, 3, 5, 6 };
++	u8 rs = rtw_phy_rate_to_rate_section(rate);
++	u8 paths = clamp_t(u8, hweight8(hal->antenna_tx), 1, 4);
++	s32 idx;
++	s8 base;
++
++	if (!hal->txpwr_cap_set || rs >= RTW_RATE_SECTION_NUM)
++		return (s8)chip->max_power_index;
++
++	/* cfg80211 value is a total: share it across active TX paths */
++	idx = (hal->txpwr_cap_dbm - path_share_dbm[paths]) << chip->txgi_factor;
++	base = band == PHY_BAND_2G ?
++	       hal->tx_pwr_by_rate_base_2g[path][rs] :
++	       hal->tx_pwr_by_rate_base_5g[path][rs];
++
++	return (s8)clamp_t(s32, idx, -chip->max_power_index - 1,
++			   chip->max_power_index) - base;
++}
++
+ void rtw_get_tx_power_params(struct rtw_dev *rtwdev, u8 path, u8 rate, u8 bw,
+ 			     u8 ch, u8 regd, struct rtw_power_params *pwr_param)
+ {
+@@ -2247,6 +2271,7 @@ void rtw_get_tx_power_params(struct rtw_dev *rtwdev, u8 path, u8 rate, u8 bw,
+ 	s8 *offset = &pwr_param->pwr_offset;
+ 	s8 *limit = &pwr_param->pwr_limit;
+ 	s8 *remnant = &pwr_param->pwr_remnant;
++	s8 *user = &pwr_param->pwr_user;
+ 	s8 *sar = &pwr_param->pwr_sar;
+ 
+ 	pwr_idx = &rtwdev->efuse.txpwr_idx_table[path];
+@@ -2271,6 +2296,7 @@ void rtw_get_tx_power_params(struct rtw_dev *rtwdev, u8 path, u8 rate, u8 bw,
+ 					    rate, ch, regd);
+ 	*remnant = rate <= DESC_RATE11M ? dm_info->txagc_remnant_cck :
+ 					  dm_info->txagc_remnant_ofdm[path];
++	*user = rtw_phy_get_user_tx_power_limit(rtwdev, band, path, rate);
+ 	*sar = rtw_phy_get_tx_power_sar(rtwdev, hal->sar_band, path, rate);
+ }
+ 
+@@ -2289,6 +2315,7 @@ rtw_phy_get_tx_power_index(struct rtw_dev *rtwdev, u8 rf_path, u8 rate,
+ 	offset = min3(pwr_param.pwr_offset,
+ 		      pwr_param.pwr_limit,
+ 		      pwr_param.pwr_sar);
++	offset = min(offset, pwr_param.pwr_user);
+ 
+ 	if (rtwdev->chip->en_dis_dpd)
+ 		offset += rtw_phy_get_dis_dpd_by_rate_diff(rtwdev, rate);
+diff --git a/drivers/net/wireless/realtek/rtw88/phy.h b/drivers/net/wireless/realtek/rtw88/phy.h
+index 8449936..c26f183 100644
+--- a/drivers/net/wireless/realtek/rtw88/phy.h
++++ b/drivers/net/wireless/realtek/rtw88/phy.h
+@@ -155,6 +155,7 @@ struct rtw_power_params {
+ 	s8 pwr_limit;
+ 	s8 pwr_remnant;
+ 	s8 pwr_sar;
++	s8 pwr_user;
+ };
+ 
+ void
