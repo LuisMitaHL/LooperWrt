@@ -1,0 +1,435 @@
+rtw88: support a second AP on 8822B
+
+The firmware beacon engine repeats exactly one reserved page, while mac80211
+hands out a beacon per BSS on demand.  Allow two AP interfaces on 8822B and
+give the second one its own beacons:
+
+ - register the interface combination for 8822B and raise the AP limit to 2;
+ - pin the firmware page to a stable vif pointer instead of a port number,
+   because mac80211 recycles ports when an interface is restarted;
+ - make ap_active a refcount and keep BIT_EN_BCNQ_DL, the DTIM register and
+   the page ownership in line with the number of running APs;
+ - drive the beacons of the AP that does not own the page from an hrtimer
+   and send them through the mgmt ring, since the beacon queue only feeds
+   the auto-repeating page.
+
+Downstream only: it builds on the beacon/rsvd-page rework and the AP
+channel-switch series, none of which is upstream.
+
+--- a/drivers/net/wireless/realtek/rtw88/main.h
++++ b/drivers/net/wireless/realtek/rtw88/main.h
+@@ -2099,6 +2099,12 @@
+ 	struct ieee80211_vif *csa_vif;
+ 	ktime_t csa_due;
+ 
++	/* downstream: software beacons for secondary APs */
++	struct hrtimer sw_beacon_timer;
++	struct work_struct sw_beacon_work;
++	unsigned int sw_beacon_int_us;
++	bool sw_beacon_inited;
++
+ 	/* used to protect txqs list */
+ 	spinlock_t txq_lock;
+ 	struct list_head txqs;
+@@ -2137,7 +2143,10 @@
+ 
+ 	bool need_rfk;
+ 	struct completion fw_scan_density;
+-	bool ap_active;
++	unsigned int ap_active;
++	bool rsvd_beacon_selected;
++	struct ieee80211_vif *fw_beacon_vif;
++	u8 fw_beacon_dtim;
+ 
+ 	bool led_registered;
+ 	char led_name[32];
+--- a/drivers/net/wireless/realtek/rtw88/hci.h
++++ b/drivers/net/wireless/realtek/rtw88/hci.h
+@@ -10,6 +10,9 @@
+ 	int (*tx_write)(struct rtw_dev *rtwdev,
+ 			struct rtw_tx_pkt_info *pkt_info,
+ 			struct sk_buff *skb);
++	int (*tx_write_beacon)(struct rtw_dev *rtwdev,
++			       struct rtw_tx_pkt_info *pkt_info,
++			       struct sk_buff *skb);
+ 	void (*tx_kick_off)(struct rtw_dev *rtwdev);
+ 	void (*flush_queues)(struct rtw_dev *rtwdev, u32 queues, bool drop);
+ 	int (*setup)(struct rtw_dev *rtwdev);
+--- a/drivers/net/wireless/realtek/rtw88/pci.c
++++ b/drivers/net/wireless/realtek/rtw88/pci.c
+@@ -825,7 +825,8 @@
+ 
+ 	pkt_desc = skb_push(skb, chip->tx_pkt_desc_sz);
+ 	memset(pkt_desc, 0, tx_pkt_desc_sz);
+-	pkt_info->qsel = rtw_pci_get_tx_qsel(skb, queue);
++	if (!pkt_info->qsel)
++		pkt_info->qsel = rtw_pci_get_tx_qsel(skb, queue);
+ 	rtw_tx_fill_tx_desc(rtwdev, pkt_info, skb);
+ 	dma = dma_map_single(&rtwpci->pdev->dev, skb->data, skb->len,
+ 			     DMA_TO_DEVICE);
+@@ -938,6 +939,33 @@
+ 	return 0;
+ }
+ 
++static int rtw_pci_tx_write_beacon(struct rtw_dev *rtwdev,
++				   struct rtw_tx_pkt_info *pkt_info,
++				   struct sk_buff *skb)
++{
++	struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
++	struct rtw_pci_tx_ring *ring;
++	int ret;
++
++	/* beacons ride the mgmt ring, the only per-frame path on PCIe */
++	pkt_info->qsel = TX_DESC_QSEL_MGMT;
++	ret = rtw_pci_tx_write_data(rtwdev, pkt_info, skb, RTW_TX_QUEUE_MGMT);
++	if (ret)
++		return ret;
++
++	ring = &rtwpci->tx_rings[RTW_TX_QUEUE_MGMT];
++	spin_lock_bh(&rtwpci->irq_lock);
++	if (avail_desc(ring->r.wp, ring->r.rp, ring->r.len) < 2) {
++		ieee80211_stop_queue(rtwdev->hw, skb_get_queue_mapping(skb));
++		ring->queue_stopped = true;
++	}
++	spin_unlock_bh(&rtwpci->irq_lock);
++
++	rtw_pci_tx_kick_off_queue(rtwdev, RTW_TX_QUEUE_MGMT);
++
++	return 0;
++}
++
+ static void rtw_pci_tx_isr(struct rtw_dev *rtwdev, struct rtw_pci *rtwpci,
+ 			   u8 hw_queue)
+ {
+@@ -1604,6 +1632,7 @@
+ 
+ static const struct rtw_hci_ops rtw_pci_ops = {
+ 	.tx_write = rtw_pci_tx_write,
++	.tx_write_beacon = rtw_pci_tx_write_beacon,
+ 	.tx_kick_off = rtw_pci_tx_kick_off,
+ 	.flush_queues = rtw_pci_flush_queues,
+ 	.setup = rtw_pci_setup,
+--- a/drivers/net/wireless/realtek/rtw88/tx.h
++++ b/drivers/net/wireless/realtek/rtw88/tx.h
+@@ -115,6 +115,9 @@
+ 
+ enum rtw_tx_queue_type rtw_tx_ac_to_hwq(enum ieee80211_ac_numbers ac);
+ enum rtw_tx_queue_type rtw_tx_queue_mapping(struct sk_buff *skb);
++int rtw_tx_write_sw_beacon(struct rtw_dev *rtwdev,
++			   struct rtw_tx_pkt_info *pkt_info,
++			   struct sk_buff *skb);
+ 
+ static inline
+ void fill_txdesc_checksum_common(u8 *txdesc, size_t words)
+--- a/drivers/net/wireless/realtek/rtw88/tx.c
++++ b/drivers/net/wireless/realtek/rtw88/tx.c
+@@ -722,6 +722,17 @@
+ }
+ EXPORT_SYMBOL(rtw_tx_ac_to_hwq);
+ 
++int rtw_tx_write_sw_beacon(struct rtw_dev *rtwdev,
++			   struct rtw_tx_pkt_info *pkt_info,
++			   struct sk_buff *skb)
++{
++	if (!rtwdev->hci.ops->tx_write_beacon)
++		return -EOPNOTSUPP;
++
++	return rtwdev->hci.ops->tx_write_beacon(rtwdev, pkt_info, skb);
++}
++EXPORT_SYMBOL(rtw_tx_write_sw_beacon);
++
+ enum rtw_tx_queue_type rtw_tx_queue_mapping(struct sk_buff *skb)
+ {
+ 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+--- a/drivers/net/wireless/realtek/rtw88/main.c
++++ b/drivers/net/wireless/realtek/rtw88/main.c
+@@ -110,7 +110,7 @@
+ 		.types = BIT(NL80211_IFTYPE_STATION),
+ 	},
+ 	{
+-		.max = 1,
++		.max = 2,
+ 		.types = BIT(NL80211_IFTYPE_AP),
+ 	}
+ };
+@@ -119,7 +119,7 @@
+ 	{
+ 		.limits = rtw_iface_limits,
+ 		.n_limits = ARRAY_SIZE(rtw_iface_limits),
+-		.max_interfaces = 2,
++		.max_interfaces = 3,
+ 		.num_different_channels = 1,
+ 	}
+ };
+@@ -1557,6 +1557,10 @@
+ 	cancel_work_sync(&rtwdev->c2h_work);
+ 	cancel_work_sync(&rtwdev->update_beacon_work);
+ 	cancel_delayed_work_sync(&rtwdev->csa_beacon_work);
++	if (rtwdev->sw_beacon_inited) {
++		hrtimer_cancel(&rtwdev->sw_beacon_timer);
++		cancel_work_sync(&rtwdev->sw_beacon_work);
++	}
+ 	cancel_delayed_work_sync(&rtwdev->watch_dog_work);
+ 	cancel_delayed_work_sync(&coex->bt_relink_work);
+ 	cancel_delayed_work_sync(&coex->bt_reenable_work);
+@@ -2300,7 +2304,8 @@
+ 	hw->wiphy->max_scan_ssids = RTW_SCAN_MAX_SSIDS;
+ 	hw->wiphy->max_scan_ie_len = rtw_get_max_scan_ie_len(rtwdev);
+ 
+-	if (rtwdev->chip->id == RTW_CHIP_TYPE_8822C) {
++	if (rtwdev->chip->id == RTW_CHIP_TYPE_8822C ||
++	    rtwdev->chip->id == RTW_CHIP_TYPE_8822B) {
+ 		hw->wiphy->iface_combinations = rtw_iface_combs;
+ 		hw->wiphy->n_iface_combinations = ARRAY_SIZE(rtw_iface_combs);
+ 	}
+--- a/drivers/net/wireless/realtek/rtw88/mac80211.c
++++ b/drivers/net/wireless/realtek/rtw88/mac80211.c
+@@ -2,6 +2,9 @@
+ /* Copyright(c) 2018-2019  Realtek Corporation
+  */
+ 
++#include <linux/hrtimer.h>
++#include <linux/moduleparam.h>
++
+ #include "main.h"
+ #include "sec.h"
+ #include "tx.h"
+@@ -207,6 +210,10 @@
+ 
+ 	switch (vif->type) {
+ 	case NL80211_IFTYPE_AP:
++		/* the firmware beacon page belongs to the first AP */
++		if (!rtwdev->fw_beacon_vif)
++			rtwdev->fw_beacon_vif = vif;
++		fallthrough;
+ 	case NL80211_IFTYPE_MESH_POINT:
+ 		rtw_add_rsvd_page_bcn(rtwdev, rtwvif);
+ 		net_type = RTW_NET_AP_MODE;
+@@ -455,7 +462,14 @@
+ 	}
+ 
+ 	if (changed & BSS_CHANGED_BEACON) {
+-		rtw_set_dtim_period(rtwdev, conf->dtim_period);
++		/* the firmware beacon comes from the page owner only; a
++		 * second AP's DTIM must not overwrite the primary's
++		 */
++		if (vif->type != NL80211_IFTYPE_AP ||
++		    vif == rtwdev->fw_beacon_vif) {
++			rtwdev->fw_beacon_dtim = conf->dtim_period;
++			rtw_set_dtim_period(rtwdev, conf->dtim_period);
++		}
+ 		rtw_fw_download_rsvd_page(rtwdev);
+ 		rtw_send_rsvd_page_h2c(rtwdev);
+ 		/* restart replay resumes it, a beacon without CSA ends it */
+@@ -469,9 +483,6 @@
+ 		if (conf->enable_beacon)
+ 			rtw_write32_set(rtwdev, REG_FWHW_TXQ_CTRL,
+ 					BIT_EN_BCNQ_DL);
+-		else
+-			rtw_write32_clr(rtwdev, REG_FWHW_TXQ_CTRL,
+-					BIT_EN_BCNQ_DL);
+ 	}
+ 	if (changed & BSS_CHANGED_CQM)
+ 		rtw_fw_beacon_filter_config(rtwdev, true, vif);
+@@ -493,6 +504,121 @@
+ 	mutex_unlock(&rtwdev->mutex);
+ }
+ 
++static bool rtw_sw_beacon = true;
++module_param_named(sw_beacon, rtw_sw_beacon, bool, 0644);
++MODULE_PARM_DESC(sw_beacon,
++		 "Send secondary AP beacons from software (downstream, default: Y)");
++
++static void rtw_sw_beacon_send_iter(void *data, struct ieee80211_vif *vif)
++{
++	struct rtw_dev *rtwdev = data;
++	struct rtw_vif *rtwvif = (struct rtw_vif *)vif->drv_priv;
++	struct rtw_tx_pkt_info pkt_info = {};
++	struct sk_buff *skb;
++	u16 tim_off, tim_len;
++
++	if (vif->type != NL80211_IFTYPE_AP || !vif->bss_conf.enable_beacon)
++		return;
++	/* the page owner is already beamed by the firmware */
++	if (vif == rtwdev->fw_beacon_vif)
++		return;
++
++	skb = ieee80211_beacon_get_tim(rtwdev->hw, vif, &tim_off, &tim_len, 0);
++	if (!skb)
++		return;
++
++	pkt_info.tx_pkt_size = skb->len;
++	pkt_info.offset = rtwdev->chip->tx_pkt_desc_sz;
++	pkt_info.mac_id = rtwvif->mac_id;
++	if (rtwdev->hal.current_band_type == RTW_BAND_2G) {
++		pkt_info.rate_id = RTW_RATEID_B_20M;
++		pkt_info.rate = DESC_RATE1M;
++	} else {
++		pkt_info.rate_id = RTW_RATEID_G;
++		pkt_info.rate = DESC_RATE6M;
++	}
++	pkt_info.use_rate = true;
++	pkt_info.dis_rate_fallback = true;
++	pkt_info.qsel = TX_DESC_QSEL_MGMT;
++	pkt_info.bmc = true;
++	pkt_info.ls = true;
++	pkt_info.dis_qselseq = true;
++	pkt_info.en_hwseq = true;
++	pkt_info.hw_ssn_sel = 0;
++
++	if (rtw_tx_write_sw_beacon(rtwdev, &pkt_info, skb)) {
++		rtw_warn(rtwdev, "failed to submit beacon on port %u\n",
++			 rtwvif->port);
++		dev_kfree_skb_any(skb);
++	}
++}
++
++struct rtw_beacon_elect_data {
++	struct ieee80211_vif *leaving;
++	struct ieee80211_vif *owner;
++};
++
++static void rtw_beacon_elect_iter(void *data, struct ieee80211_vif *vif)
++{
++	struct rtw_beacon_elect_data *elect = data;
++
++	if (elect->owner || vif->type != NL80211_IFTYPE_AP ||
++	    vif == elect->leaving || !vif->bss_conf.enable_beacon)
++		return;
++
++	elect->owner = vif;
++}
++
++/* keep the firmware beacon page alive when its owner goes away */
++static void rtw_fw_reelect_beacon_vif(struct rtw_dev *rtwdev,
++				      struct ieee80211_vif *leaving)
++{
++	struct rtw_beacon_elect_data elect = {
++		.leaving = leaving,
++	};
++
++	if (rtwdev->fw_beacon_vif != leaving)
++		return;
++
++	rtwdev->fw_beacon_vif = NULL;
++	rtw_iterate_vifs(rtwdev, rtw_beacon_elect_iter, &elect);
++	if (!elect.owner)
++		return;
++
++	rtwdev->fw_beacon_vif = elect.owner;
++	rtwdev->fw_beacon_dtim = elect.owner->bss_conf.dtim_period;
++	rtw_set_dtim_period(rtwdev, rtwdev->fw_beacon_dtim);
++	rtw_fw_download_rsvd_page(rtwdev);
++
++	rtw_dbg(rtwdev, RTW_DBG_STATE,
++		"firmware beacon page moved to %pM\n", elect.owner->addr);
++}
++
++static void rtw_sw_beacon_work(struct work_struct *work)
++{
++	struct rtw_dev *rtwdev = container_of(work, struct rtw_dev,
++					      sw_beacon_work);
++
++	if (!rtw_sw_beacon || rtwdev->ap_active < 2)
++		return;
++
++	mutex_lock(&rtwdev->mutex);
++	rtw_iterate_vifs(rtwdev, rtw_sw_beacon_send_iter, rtwdev);
++	mutex_unlock(&rtwdev->mutex);
++}
++
++static enum hrtimer_restart rtw_sw_beacon_timer_fn(struct hrtimer *timer)
++{
++	struct rtw_dev *rtwdev = container_of(timer, struct rtw_dev,
++					      sw_beacon_timer);
++
++	ieee80211_queue_work(rtwdev->hw, &rtwdev->sw_beacon_work);
++	hrtimer_forward_now(timer,
++			    ns_to_ktime((u64)rtwdev->sw_beacon_int_us * 1000));
++
++	return HRTIMER_RESTART;
++}
++
+ static int rtw_ops_start_ap(struct ieee80211_hw *hw,
+ 			    struct ieee80211_vif *vif,
+ 			    struct ieee80211_bss_conf *link_conf)
+@@ -502,7 +628,23 @@
+ 
+ 	mutex_lock(&rtwdev->mutex);
+ 	rtw_write32_set(rtwdev, REG_TCR, BIT_TCR_UPDATE_HGQMD);
+-	rtwdev->ap_active = true;
++	rtwdev->ap_active++;
++	if (!rtwdev->fw_beacon_vif)
++		rtwdev->fw_beacon_vif = vif;
++	if (rtw_sw_beacon && rtwdev->ap_active == 2) {
++		rtwdev->sw_beacon_int_us = vif->bss_conf.beacon_int * 1024;
++		if (!rtwdev->sw_beacon_inited) {
++			INIT_WORK(&rtwdev->sw_beacon_work, rtw_sw_beacon_work);
++			hrtimer_setup(&rtwdev->sw_beacon_timer,
++				      rtw_sw_beacon_timer_fn, CLOCK_MONOTONIC,
++				      HRTIMER_MODE_REL);
++			rtwdev->sw_beacon_inited = true;
++		}
++		hrtimer_start(&rtwdev->sw_beacon_timer,
++			      ns_to_ktime((u64)rtwdev->sw_beacon_int_us * 1000),
++			      HRTIMER_MODE_REL);
++		ieee80211_queue_work(rtwdev->hw, &rtwdev->sw_beacon_work);
++	}
+ 	rtw_store_op_chan(rtwdev, true);
+ 	chip->ops->phy_calibration(rtwdev);
+ 	mutex_unlock(&rtwdev->mutex);
+@@ -519,7 +661,18 @@
+ 	mutex_lock(&rtwdev->mutex);
+ 	rtw_fw_csa_stop(rtwdev, vif);
+ 	rtw_write32_clr(rtwdev, REG_TCR, BIT_TCR_UPDATE_HGQMD);
+-	rtwdev->ap_active = false;
++	if (rtwdev->ap_active)
++		rtwdev->ap_active--;
++	if (!rtwdev->ap_active) {
++		rtwdev->fw_beacon_vif = NULL;
++		rtw_write32_clr(rtwdev, REG_FWHW_TXQ_CTRL,
++				 BIT_EN_BCNQ_DL);
++	} else {
++		/* hand the firmware beacon page to a survivor */
++		rtw_fw_reelect_beacon_vif(rtwdev, vif);
++	}
++	if (rtw_sw_beacon && rtwdev->sw_beacon_inited)
++		hrtimer_cancel(&rtwdev->sw_beacon_timer);
+ 	if (!rtw_core_check_sta_active(rtwdev))
+ 		rtw_clear_op_chan(rtwdev);
+ 	mutex_unlock(&rtwdev->mutex);
+--- a/drivers/net/wireless/realtek/rtw88/fw.c
++++ b/drivers/net/wireless/realtek/rtw88/fw.c
+@@ -1581,12 +1581,17 @@
+ 		return;
+ 
+ 	list_for_each_entry(rsvd_pkt, &rtwvif->rsvd_page_list, vif_list) {
+-		if (rsvd_pkt->type == RSVD_BEACON)
+-			list_add(&rsvd_pkt->build_list,
+-				 &rtwdev->rsvd_page_list);
+-		else
+-			list_add_tail(&rsvd_pkt->build_list,
+-				      &rtwdev->rsvd_page_list);
++		if (rsvd_pkt->type == RSVD_BEACON) {
++			/* firmware repeats a single beacon page; always
++			 * hand it to the elected page owner
++			 */
++			if (rtwdev->rsvd_beacon_selected ||
++			    vif != rtwdev->fw_beacon_vif)
++				continue;
++			rtwdev->rsvd_beacon_selected = true;
++		}
++		list_add_tail(&rsvd_pkt->build_list,
++			      &rtwdev->rsvd_page_list);
+ 	}
+ }
+ 
+@@ -1596,6 +1601,8 @@
+ 
+ 	__rtw_build_rsvd_page_reset(rtwdev);
+ 
++	rtwdev->rsvd_beacon_selected = false;
++
+ 	/* gather rsvd page from vifs */
+ 	rtw_iterate_vifs_atomic(rtwdev, rtw_build_rsvd_page_iter, rtwdev);
+ 
