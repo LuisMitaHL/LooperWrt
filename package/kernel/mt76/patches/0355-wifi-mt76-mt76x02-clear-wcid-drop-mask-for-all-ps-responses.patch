@@ -1,0 +1,46 @@
+From 4af6beb07b88febdf2c348b5d864bb7b8ace0fb8 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Fri, 23 Oct 2026 13:13:18 +0200
+Subject: [PATCH] wifi: mt76: mt76x02: clear the wcid drop mask for all
+ powersave responses
+
+mt76x02_tx_prepare_skb() clears the drop bit of a sleeping station only
+for frames on MT_TXQ_PSD. Only frames that
+mt76_release_buffered_frames() releases from the driver TXQs use that
+queue. Frames that mac80211 buffered itself go through the regular tx
+path on their access category queue, and the hardware discards these
+PS-Poll and U-APSD responses.
+
+Clear the drop bit for every frame that mac80211 marks as a powersave
+response or as exempt from powersave buffering, like
+mt7603_tx_prepare_skb() does.
+
+Fixes: 7bc04215a66b ("mt76: add driver code for MT76x2e")
+Link: https://patch.msgid.link/20261023111318.2802233-3-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt76x02_txrx.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/mt76x02_txrx.c b/mt76x02_txrx.c
+index 3ca530f1..1698eb90 100644
+--- a/mt76x02_txrx.c
++++ b/mt76x02_txrx.c
+@@ -158,11 +158,15 @@ int mt76x02_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
+ {
+ 	struct mt76x02_dev *dev = container_of(mdev, struct mt76x02_dev, mt76);
+ 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)tx_info->skb->data;
++	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(tx_info->skb);
+ 	struct mt76x02_txwi *txwi = txwi_ptr;
+-	bool ampdu = IEEE80211_SKB_CB(tx_info->skb)->flags & IEEE80211_TX_CTL_AMPDU;
++	bool ampdu = info->flags & IEEE80211_TX_CTL_AMPDU;
+ 	int hdrlen, len, pid, qsel = MT_QSEL_EDCA;
+ 
+-	if (qid == MT_TXQ_PSD && wcid && wcid->idx < 128)
++	if (wcid && wcid->idx < MT76x02_N_WCIDS &&
++	    ((info->flags & (IEEE80211_TX_CTL_NO_PS_BUFFER |
++			     IEEE80211_TX_CTL_CLEAR_PS_FILT)) ||
++	     (info->control.flags & IEEE80211_TX_CTRL_PS_RESPONSE)))
+ 		mt76x02_mac_wcid_set_drop(dev, wcid->idx, false);
+ 
+ 	hdrlen = ieee80211_hdrlen(hdr->frame_control);

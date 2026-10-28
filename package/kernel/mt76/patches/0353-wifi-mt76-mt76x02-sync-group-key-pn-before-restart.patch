@@ -1,0 +1,54 @@
+From 558c6aee6891835cece01a14c6f46725af1678c0 Mon Sep 17 00:00:00 2001
+From: Cristian Papa <pcristian292@gmail.com>
+Date: Sun, 11 Oct 2026 04:27:02 -0300
+Subject: [PATCH] wifi: mt76: mt76x02: sync the group key PN before a restart
+
+mt76x02_key_sync() skips keys without a station, including the GTK of
+an AP. The hardware advances its TX packet number without updating
+key->tx_pn. When mac80211 reinstalls the key after a watchdog restart,
+mt76x02_mac_wcid_set_key() writes that stale software value back to the
+hardware IV table. Peers retaining the GTK can then reject group frames
+as replays.
+
+On an MT7612E AP, saved snapshots show the hardware PN of the same active
+CCMP GTK falling from 6412 to 0 across two watchdog restarts, while its
+software PN remained zero. The PMF pairwise keys continued to advance
+their software counters.
+
+Use the interface's group WCID for keys without a station. Keep the
+key-index check so that, when two GTKs are installed, only the key
+programmed into that WCID is synchronized. Also retain the sw_iv check
+to avoid overwriting software-generated packet numbers, including those
+used by PMF pairwise keys.
+
+Fixes: 004960423fe1 ("mt76: mt76x2: implement full device restart on watchdog reset")
+Assisted-by: LLM
+Signed-off-by: Cristian Papa <pcristian292@gmail.com>
+Link: https://patch.msgid.link/20261011072702.2535-1-pcristian292@gmail.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt76x02_mmio.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/mt76x02_mmio.c b/mt76x02_mmio.c
+index dc7c03d2..ce4e0086 100644
+--- a/mt76x02_mmio.c
++++ b/mt76x02_mmio.c
+@@ -377,12 +377,13 @@ static void mt76x02_key_sync(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+ 			     struct ieee80211_key_conf *key, void *data)
+ {
+ 	struct mt76x02_dev *dev = hw->priv;
++	struct mt76x02_vif *mvif = (struct mt76x02_vif *)vif->drv_priv;
+ 	struct mt76_wcid *wcid;
+ 
+-	if (!sta)
+-		return;
+-
+-	wcid = (struct mt76_wcid *)sta->drv_priv;
++	if (sta)
++		wcid = (struct mt76_wcid *)sta->drv_priv;
++	else
++		wcid = &mvif->group_wcid;
+ 
+ 	if (wcid->hw_key_idx != key->keyidx || wcid->sw_iv)
+ 		return;

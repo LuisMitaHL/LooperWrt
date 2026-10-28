@@ -1,0 +1,137 @@
+From 8127e3ff88ffd313c2c80c1cbf0ab01f171abf2d Mon Sep 17 00:00:00 2001
+From: Cristian Papa <pcristian292@gmail.com>
+Date: Wed, 14 Oct 2026 11:42:06 -0300
+Subject: [PATCH] wifi: mt76: mt76x02: keep stations registered during watchdog
+ recovery
+
+On a full watchdog reset, mt76x02_reset_state() unpublishes each station
+WCID, removes it with __mt76_sta_remove() and clears its driver data, so
+that ieee80211_restart_hw() adds it again. mac80211 still owns the
+stations, and dev->mutex is released before the restart is requested.
+A station removed in that interval reaches mt76_wcid_cleanup() with
+zeroed list heads:
+
+  [   66.096357] CPU 1 Unable to handle kernel paging request at virtual address 00000000, epc == 849063c4, ra == 849063b0
+  [   66.107085] Oops[#1]:
+  [   66.496876] Kernel panic - not syncing: Fatal exception in interrupt
+
+The fault is the CONFIG_LIST_HARDENED check in
+list_del_init(&wcid->poll_list), reached via mt76_sta_state() ->
+mt76_sta_remove() -> __mt76_sta_remove(). A station added in that
+interval is replayed as well: it gets a second WCID, the first one
+leaks, and phy->num_sta counts it twice.
+
+Keep the stations registered with the driver. During recovery,
+unpublish their WCIDs, flush them and clear their hardware entries,
+but keep the WCID index and leave the software state initialised. The
+WCIDs stay unpublished until the replay, because mac80211 frees the
+stations without a driver callback if the restart fails.
+
+On replay, restore only the hardware entry, with the drop state that
+matches the power save state of the station. mac80211 zeroes the
+driver data of a new station, so wcid->sta identifies a replay. Count
+a station in mt76_sta_add() only on its first registration.
+
+Fixes: 004960423fe1 ("mt76: mt76x2: implement full device restart on watchdog reset")
+Cc: stable@vger.kernel.org
+Assisted-by: LLM
+Signed-off-by: Cristian Papa <pcristian292@gmail.com>
+Link: https://patch.msgid.link/20261014144206.7401-1-pcristian292@gmail.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mac80211.c     |  6 +++++-
+ mt76x02_mmio.c | 18 +++++++++---------
+ mt76x02_util.c | 11 ++++++++++-
+ 3 files changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/mac80211.c b/mac80211.c
+index 41d36360..b4919b3f 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -1610,11 +1610,14 @@ mt76_sta_add(struct mt76_phy *phy, struct ieee80211_vif *vif,
+ 	struct mt76_wcid *wcid = (struct mt76_wcid *)sta->drv_priv;
+ 	struct mt76_dev *dev = phy->dev;
+ 	struct mt76_wcid *published;
++	bool registered;
+ 	int ret;
+ 	int i;
+ 
+ 	mutex_lock(&dev->mutex);
+ 
++	/* drv_priv of a new station is zeroed, so only a replay has it set */
++	registered = wcid->sta;
+ 	ret = dev->drv->sta_add(dev, vif, sta);
+ 	if (ret)
+ 		goto out;
+@@ -1640,7 +1643,8 @@ mt76_sta_add(struct mt76_phy *phy, struct ieee80211_vif *vif,
+ 		wcid->phy_idx = phy->band_idx;
+ 	}
+ 
+-	phy->num_sta++;
++	if (!registered)
++		phy->num_sta++;
+ 
+ out:
+ 	mutex_unlock(&dev->mutex);
+diff --git a/mt76x02_mmio.c b/mt76x02_mmio.c
+index ce4e0086..dfcaf621 100644
+--- a/mt76x02_mmio.c
++++ b/mt76x02_mmio.c
+@@ -404,11 +404,9 @@ static void mt76x02_reset_state(struct mt76x02_dev *dev)
+ 	rcu_read_unlock();
+ 
+ 	for (i = 0; i < MT76x02_N_WCIDS; i++) {
+-		struct ieee80211_sta *sta;
+-		struct ieee80211_vif *vif;
+ 		struct mt76x02_sta *msta;
+ 		struct mt76_wcid *wcid;
+-		void *priv;
++		int tid;
+ 
+ 		wcid = rcu_dereference_protected(dev->mt76.wcid[i],
+ 					lockdep_is_held(&dev->mt76.mutex));
+@@ -417,14 +415,16 @@ static void mt76x02_reset_state(struct mt76x02_dev *dev)
+ 
+ 		rcu_assign_pointer(dev->mt76.wcid[i], NULL);
+ 
+-		priv = msta = container_of(wcid, struct mt76x02_sta, wcid);
+-		sta = container_of(priv, struct ieee80211_sta, drv_priv);
++		for (tid = 0; tid < ARRAY_SIZE(wcid->aggr); tid++)
++			mt76_rx_aggr_stop(&dev->mt76, wcid, tid);
+ 
+-		priv = msta->vif;
+-		vif = container_of(priv, struct ieee80211_vif, drv_priv);
++		mt76x02_mac_wcid_set_drop(dev, wcid->idx, true);
++		mt76x02_mac_wcid_setup(dev, wcid->idx, 0, NULL);
++		mt76_wcid_cleanup(&dev->mt76, wcid);
+ 
+-		__mt76_sta_remove(&dev->mphy, vif, sta);
+-		memset(msta, 0, sizeof(*msta));
++		msta = container_of(wcid, struct mt76x02_sta, wcid);
++		memset(&msta->status, 0, sizeof(msta->status));
++		msta->n_frames = 0;
+ 	}
+ 
+ 	dev->mt76.vif_mask = 0;
+diff --git a/mt76x02_util.c b/mt76x02_util.c
+index e5d9d1bc..96271b1a 100644
+--- a/mt76x02_util.c
++++ b/mt76x02_util.c
+@@ -241,7 +241,16 @@ int mt76x02_sta_add(struct mt76_dev *mdev, struct ieee80211_vif *vif,
+ 	struct mt76x02_dev *dev = container_of(mdev, struct mt76x02_dev, mt76);
+ 	struct mt76x02_sta *msta = (struct mt76x02_sta *)sta->drv_priv;
+ 	struct mt76x02_vif *mvif = (struct mt76x02_vif *)vif->drv_priv;
+-	int idx = 0;
++	int idx = msta->wcid.idx;
++
++	/* replayed by ieee80211_restart_hw() after a watchdog reset */
++	if (msta->wcid.sta) {
++		mt76x02_mac_wcid_setup(dev, idx, mvif->idx, sta->addr);
++		mt76x02_mac_wcid_set_drop(dev, idx,
++					  test_bit(MT_WCID_FLAG_PS,
++						   &msta->wcid.flags));
++		return 0;
++	}
+ 
+ 	memset(msta, 0, sizeof(*msta));
+ 

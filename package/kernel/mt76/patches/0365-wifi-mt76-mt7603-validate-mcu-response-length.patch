@@ -1,0 +1,33 @@
+From 5e697c3982d787df95ba84f56a133080a89f4180 Mon Sep 17 00:00:00 2001
+From: Jiale Yao <yaojiale02@163.com>
+Date: Mon, 19 Oct 2026 18:14:56 +0800
+Subject: [PATCH] wifi: mt76: mt7603: validate MCU response length
+
+The MCU response parser reads the sequence number from the receive
+descriptor without first ensuring that the descriptor is present. A
+truncated firmware response can therefore cause an out-of-bounds read.
+
+Reject responses shorter than the receive descriptor before accessing
+the sequence number.
+
+Fixes: f320d812b7bb ("mt76: implement .mcu_parse_response in struct mt76_mcu_ops")
+Signed-off-by: Jiale Yao <yaojiale02@163.com>
+Link: https://patch.msgid.link/20261019101506.1926943-2-yaojiale02@163.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7603/mcu.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/mt7603/mcu.c b/mt7603/mcu.c
+index e432cce9..b231fb2d 100644
+--- a/mt7603/mcu.c
++++ b/mt7603/mcu.c
+@@ -26,6 +26,8 @@ mt7603_mcu_parse_response(struct mt76_dev *mdev, int cmd,
+ 		dev->mcu_hang = MT7603_WATCHDOG_TIMEOUT;
+ 		return -ETIMEDOUT;
+ 	}
++	if (skb->len < sizeof(*rxd))
++		return -EINVAL;
+ 
+ 	rxd = (struct mt7603_mcu_rxd *)skb->data;
+ 	if (seq != rxd->seq)
