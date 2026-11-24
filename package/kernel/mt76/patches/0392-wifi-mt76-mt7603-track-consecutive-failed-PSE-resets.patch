@@ -1,0 +1,94 @@
+From 40f70d42c01347a941b8e426510b4771e52c5638 Mon Sep 17 00:00:00 2001
+From: David Bauer <mail@david-bauer.net>
+Date: Tue, 3 Nov 2026 01:35:33 +0100
+Subject: [PATCH] wifi: mt76: mt7603: track consecutive failed PSE resets
+
+The current PSE recovery process uses the global reset cause counter to
+clear the MT_MCU_DEBUG_RESET_PSE_S only every 3rd attempt. The counter
+then wraps around.
+
+This does not allow to track the total number of failed PSE reset
+attempts. Introduce a new separate counter for consecutive failed resets
+and clear the bit based on the value of that counter.
+
+Keep RESET_FAILED reset cause as a cumulative statistic.
+
+Also add a short comment about how the reset procedure handles the
+failed case in terms of the retry limit.
+
+Signed-off-by: David Bauer <mail@david-bauer.net>
+Link: https://patch.msgid.link/20261103003534.176866-1-mail@david-bauer.net
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7603/mac.c    | 15 ++++++++-------
+ mt7603/mt7603.h |  1 +
+ 2 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/mt7603/mac.c b/mt7603/mac.c
+index fa0bf9a2..196c39f2 100644
+--- a/mt7603/mac.c
++++ b/mt7603/mac.c
+@@ -1342,7 +1342,7 @@ wait_for_wpdma(struct mt7603_dev *dev)
+ static void mt7603_pse_reset(struct mt7603_dev *dev)
+ {
+ 	/* Clear previous reset result */
+-	if (!dev->reset_cause[RESET_CAUSE_RESET_FAILED])
++	if (!dev->failed_pse_reset_attempts)
+ 		mt76_clear(dev, MT_MCU_DEBUG_RESET, MT_MCU_DEBUG_RESET_PSE_S);
+ 
+ 	/* Reset PSE */
+@@ -1351,15 +1351,16 @@ static void mt7603_pse_reset(struct mt7603_dev *dev)
+ 	if (!mt76_poll_msec(dev, MT_MCU_DEBUG_RESET,
+ 			    MT_MCU_DEBUG_RESET_PSE_S,
+ 			    MT_MCU_DEBUG_RESET_PSE_S, 500)) {
++		dev->failed_pse_reset_attempts++;
+ 		dev->reset_cause[RESET_CAUSE_RESET_FAILED]++;
+ 		mt76_clear(dev, MT_MCU_DEBUG_RESET, MT_MCU_DEBUG_RESET_PSE);
+ 	} else {
+-		dev->reset_cause[RESET_CAUSE_RESET_FAILED] = 0;
++		dev->failed_pse_reset_attempts = 0;
+ 		mt76_clear(dev, MT_MCU_DEBUG_RESET, MT_MCU_DEBUG_RESET_QUEUES);
+ 	}
+ 
+-	if (dev->reset_cause[RESET_CAUSE_RESET_FAILED] >= 3)
+-		dev->reset_cause[RESET_CAUSE_RESET_FAILED] = 0;
++	if (dev->failed_pse_reset_attempts >= 3)
++		dev->failed_pse_reset_attempts = 0;
+ }
+ 
+ void mt7603_mac_dma_start(struct mt7603_dev *dev)
+@@ -1481,11 +1482,11 @@ static void mt7603_mac_watchdog_reset(struct mt7603_dev *dev)
+ 		mt76_queue_rx_reset(dev, i);
+ 	}
+ 
+-	if (dev->reset_cause[RESET_CAUSE_RESET_FAILED] ||
++	if (dev->failed_pse_reset_attempts ||
+ 	    dev->cur_reset_cause == RESET_CAUSE_RX_PSE_BUSY)
+ 		mt7603_pse_reset(dev);
+ 
+-	if (!dev->reset_cause[RESET_CAUSE_RESET_FAILED]) {
++	if (!dev->failed_pse_reset_attempts) {
+ 		mt7603_mac_dma_start(dev);
+ 
+ 		mt7603_irq_enable(dev, mask);
+@@ -1920,7 +1921,7 @@ void mt7603_mac_work(struct work_struct *work)
+ 	    mt7603_watchdog_check(dev, &dev->mcu_hang,
+ 				  RESET_CAUSE_MCU_HANG,
+ 				  NULL) ||
+-	    dev->reset_cause[RESET_CAUSE_RESET_FAILED]) {
++	    dev->failed_pse_reset_attempts) {
+ 		dev->beacon_check = 0;
+ 		dev->tx_dma_check = 0;
+ 		dev->tx_hang_check = 0;
+diff --git a/mt7603/mt7603.h b/mt7603/mt7603.h
+index 5b0ecd01..47f5be44 100644
+--- a/mt7603/mt7603.h
++++ b/mt7603/mt7603.h
+@@ -155,6 +155,7 @@ struct mt7603_dev {
+ 
+ 	u32 reset_test;
+ 
++	u8 failed_pse_reset_attempts;
+ 	unsigned int reset_cause[__RESET_CAUSE_MAX];
+ };
+ 

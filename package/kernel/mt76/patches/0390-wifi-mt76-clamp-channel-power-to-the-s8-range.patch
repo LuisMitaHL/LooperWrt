@@ -1,0 +1,35 @@
+From 48ab251ed669f2218f84921e36485a368cbbcad6 Mon Sep 17 00:00:00 2001
+From: "allen.chien" <yung-lun.chien@mediatek.com>
+Date: Wed, 11 Nov 2026 10:27:49 +0800
+Subject: [PATCH] wifi: mt76: clamp channel power to the s8 range
+
+mt76_connac_get_ch_power() computes power as an int from
+2 * ch->max_reg_power and then compares it with target_power through
+min_t(s8, ...), which truncates the value to 8 bits. An out-of-range
+max_reg_power would wrap (e.g. 300 becomes 44) and could lower
+target_power wrongly.
+
+Clamp the value into the s8 range when it is calculated. Regulatory
+limits are far below that range, so valid input is not affected.
+
+Signed-off-by: allen.chien <yung-lun.chien@mediatek.com>
+Link: https://patch.msgid.link/20261111022749.784001-1-jb.tsai@mediatek.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt76_connac_mcu.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/mt76_connac_mcu.c b/mt76_connac_mcu.c
+index 4da31448..6e5cbd69 100644
+--- a/mt76_connac_mcu.c
++++ b/mt76_connac_mcu.c
+@@ -2176,7 +2176,8 @@ s8 mt76_connac_get_ch_power(struct mt76_phy *phy,
+ 
+ 		if (ch->hw_value == chan->hw_value) {
+ 			if (!(ch->flags & IEEE80211_CHAN_DISABLED)) {
+-				int power = 2 * ch->max_reg_power;
++				int power = clamp_t(int, 2 * ch->max_reg_power,
++						    S8_MIN, S8_MAX);
+ 
+ 				if (is_mt7663(dev) && (power > 63 || power < -64))
+ 					power = 63;

@@ -1,0 +1,61 @@
+From 4938ad16d5b03badc1d0b3e9e045a39088b3c52b Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 23 Nov 2026 14:49:03 +0100
+Subject: [PATCH] wifi: mt76: mt7915: leave the BIP check of a group frame to
+ mac80211
+
+mt7915_mac_fill_rx() sets RX_FLAG_DECRYPTED and RX_FLAG_IV_STRIPPED
+for every frame whose RXD carries a cipher. That includes a group
+addressed robust Management frame that the hardware matched with the
+IGTK. The MME of such a frame stays in place, and the driver installs
+the IGTK without an IPN.
+
+With both flags, ieee80211_rx_h_decrypt() takes the frame as verified
+and checks neither the MIC nor the IPN. The firmware of mt7981 keeps no
+RX IPN. On mt7981, a station with PMF thus accepts a replayed group
+Deauthentication or Disassociation of its AP.
+
+Do not report a frame with a BIP cipher as decrypted. mac80211 then
+selects the IGTK by the key id of the MME, and checks the IPN and the
+MIC. It also removes the MME. For an offloaded IGTK, it uses the CMAC
+key that it keeps.
+
+Fixes: e57b7901469f ("mt76: add mac80211 driver for MT7915 PCIe-based chipsets")
+Link: https://patch.msgid.link/20261123134920.154270-4-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/mac.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index ad72d421..e3e78f3c 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -285,6 +285,7 @@ mt7915_mac_fill_rx(struct mt7915_dev *dev, struct sk_buff *skb,
+ 	u16 hdr_gap;
+ 	u16 seq_ctrl = 0;
+ 	__le16 fc = 0;
++	u8 sec_mode;
+ 	int idx;
+ 
+ 	memset(status, 0, sizeof(*status));
+@@ -343,7 +344,9 @@ mt7915_mac_fill_rx(struct mt7915_dev *dev, struct sk_buff *skb,
+ 	if (rxd1 & MT_RXD1_NORMAL_TKIP_MIC_ERR)
+ 		status->flag |= RX_FLAG_MMIC_ERROR;
+ 
+-	if (FIELD_GET(MT_RXD1_NORMAL_SEC_MODE, rxd1) != 0 &&
++	/* a BIP frame keeps its MME, for mac80211 to check MIC and IPN */
++	sec_mode = FIELD_GET(MT_RXD1_NORMAL_SEC_MODE, rxd1);
++	if (sec_mode != 0 && sec_mode != MT_CIPHER_BIP_CMAC_128 &&
+ 	    !(rxd1 & (MT_RXD1_NORMAL_CLM | MT_RXD1_NORMAL_CM))) {
+ 		status->flag |= RX_FLAG_DECRYPTED;
+ 		status->flag |= RX_FLAG_IV_STRIPPED;
+@@ -373,7 +376,7 @@ mt7915_mac_fill_rx(struct mt7915_dev *dev, struct sk_buff *skb,
+ 		u8 *data = (u8 *)rxd;
+ 
+ 		if (status->flag & RX_FLAG_DECRYPTED) {
+-			switch (FIELD_GET(MT_RXD1_NORMAL_SEC_MODE, rxd1)) {
++			switch (sec_mode) {
+ 			case MT_CIPHER_AES_CCMP:
+ 			case MT_CIPHER_CCMP_CCX:
+ 			case MT_CIPHER_CCMP_256:

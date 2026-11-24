@@ -1,0 +1,46 @@
+From 55a6506484a254ce0092c0ecfa711f55f418dad3 Mon Sep 17 00:00:00 2001
+From: Xiangwu Lai <laixiangwu@cmss.chinamobile.com>
+Date: Wed, 18 Nov 2026 09:39:51 +0800
+Subject: [PATCH] wifi: mt76: mt7915: fix clock leak in mt798x_wmac_init()
+
+mt798x_wmac_init() enables the "mcu" and "ap2conn" clocks with
+clk_prepare_enable() but never disables them, not even when a later
+step of the probe fails (the devm_platform_ioremap_resource() and
+devm_reset_control_get() calls below). The clocks stay prepared and
+enabled after a failed probe.
+
+Use devm_clk_get_enabled() to get and enable them, so the clocks are
+automatically disabled and their references released if the probe
+fails after them or when the driver detaches.
+
+Fixes: cd85efdfd099 ("mt76: mt7915: configure soc clocks in mt7986_wmac_init")
+Signed-off-by: Xiangwu Lai <laixiangwu@cmss.chinamobile.com>
+Link: https://patch.msgid.link/20261118013951.1710-1-laixiangwu@cmss.chinamobile.com
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/soc.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/mt7915/soc.c b/mt7915/soc.c
+index 232fa47c..b9e78a42 100644
+--- a/mt7915/soc.c
++++ b/mt7915/soc.c
+@@ -1199,16 +1199,12 @@ static int mt798x_wmac_init(struct mt7915_dev *dev)
+ 	struct platform_device *pfdev = to_platform_device(pdev);
+ 	struct clk *mcu_clk, *ap_conn_clk;
+ 
+-	mcu_clk = devm_clk_get(pdev, "mcu");
++	mcu_clk = devm_clk_get_enabled(pdev, "mcu");
+ 	if (IS_ERR(mcu_clk))
+-		dev_err(pdev, "mcu clock not found\n");
+-	else if (clk_prepare_enable(mcu_clk))
+ 		dev_err(pdev, "mcu clock configuration failed\n");
+ 
+-	ap_conn_clk = devm_clk_get(pdev, "ap2conn");
++	ap_conn_clk = devm_clk_get_enabled(pdev, "ap2conn");
+ 	if (IS_ERR(ap_conn_clk))
+-		dev_err(pdev, "ap2conn clock not found\n");
+-	else if (clk_prepare_enable(ap_conn_clk))
+ 		dev_err(pdev, "ap2conn clock configuration failed\n");
+ 
+ 	dev->dcm = devm_platform_ioremap_resource(pfdev, 1);

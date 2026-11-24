@@ -1,0 +1,42 @@
+From 818ef5f246d9b735753b4bf615274a967fe80a60 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 23 Nov 2026 14:49:19 +0100
+Subject: [PATCH] wifi: mt76: mt7915: reset the CCA statistics of band 1 on
+ mt7916
+
+mt7915_mac_cca_stats_reset() takes MT_WF_PHY_RX_CTRL1() on every chip,
+which spaces the bands 0x10000 apart as on MT7915. On mt7916, mt7981 and
+mt7986 the bands are 0x100000 apart.
+
+A channel set of band 1 thus writes the statistics enable bits into a
+band 0 register. That register lies outside the RX control block. The
+restart of the band 1 counters at a channel set does not reach the
+band 1 register.
+
+Use the MT7916 register form on the chips other than MT7915, as
+mt7915_mac_enable_nf() does.
+
+Fixes: 2e30db0dde61 ("mt76: mt7915: add device id for mt7916")
+Link: https://patch.msgid.link/20261123134920.154270-20-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/mac.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index 93169200..f7cbeab3 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -1100,8 +1100,11 @@ void mt7915_queue_rx_skb(struct mt76_dev *mdev, enum mt76_rxq_id q,
+ void mt7915_mac_cca_stats_reset(struct mt7915_phy *phy)
+ {
+ 	struct mt7915_dev *dev = phy->dev;
+-	u32 reg = MT_WF_PHY_RX_CTRL1(phy->mt76->band_idx);
++	u8 band = phy->mt76->band_idx;
++	u32 reg;
+ 
++	reg = is_mt7915(&dev->mt76) ? MT_WF_PHY_RX_CTRL1(band) :
++				      MT_WF_PHY_RX_CTRL1_MT7916(band);
+ 	mt76_clear(dev, reg, MT_WF_PHY_RX_CTRL1_STSCNT_EN);
+ 	mt76_set(dev, reg, BIT(11) | BIT(9));
+ }

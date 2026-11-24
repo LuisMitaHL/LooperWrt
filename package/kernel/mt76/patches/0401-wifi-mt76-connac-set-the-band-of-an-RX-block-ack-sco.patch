@@ -1,0 +1,115 @@
+From 05e54cdbe3910fbddc87fc61b37a4d0052afd2bd Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 23 Nov 2026 14:49:18 +0100
+Subject: [PATCH] wifi: mt76: connac: set the band of an RX block ack
+ scoreboard reset
+
+mt76_connac_mcu_wtbl_ba_tlv() leaves band_idx of the recipient WTBL_BA
+TLV at 0. The firmware takes the band of the RX block ack scoreboard
+reset from this field alone. A session start or stop of a station on
+band 1 thus resets the scoreboard entry of band 0. The entry on band 1
+gets no reset.
+
+Reachable via mt7915_ampdu_action() for every station of a band 1 phy.
+
+Pass the band of the station's interface with the TLV. mt7615 keeps
+band 0, because its firmware's use of the field is not known.
+
+Fixes: e57b7901469f ("mt76: add mac80211 driver for MT7915 PCIe-based chipsets")
+Link: https://patch.msgid.link/20261123134920.154270-19-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7615/mcu.c      | 8 ++++----
+ mt76_connac_mcu.c | 9 +++++----
+ mt76_connac_mcu.h | 4 ++--
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/mt7615/mcu.c b/mt7615/mcu.c
+index 3b498266..e31fb63a 100644
+--- a/mt7615/mcu.c
++++ b/mt7615/mcu.c
+@@ -796,7 +796,7 @@ mt7615_mcu_wtbl_tx_ba(struct mt7615_dev *dev,
+ 		return PTR_ERR(wtbl_hdr);
+ 
+ 	mt76_connac_mcu_wtbl_ba_tlv(&dev->mt76, skb, params, enable, true,
+-				    NULL, wtbl_hdr);
++				    0, NULL, wtbl_hdr);
+ 
+ 	err = mt76_mcu_skb_send_msg(&dev->mt76, skb,
+ 				    MCU_EXT_CMD(WTBL_UPDATE), true);
+@@ -844,7 +844,7 @@ mt7615_mcu_wtbl_rx_ba(struct mt7615_dev *dev,
+ 		return PTR_ERR(wtbl_hdr);
+ 
+ 	mt76_connac_mcu_wtbl_ba_tlv(&dev->mt76, skb, params, enable, false,
+-				    NULL, wtbl_hdr);
++				    0, NULL, wtbl_hdr);
+ 
+ 	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+ 				     MCU_EXT_CMD(WTBL_UPDATE), true);
+@@ -967,7 +967,7 @@ mt7615_mcu_sta_ba(struct mt7615_dev *dev,
+ 		return PTR_ERR(wtbl_hdr);
+ 
+ 	mt76_connac_mcu_wtbl_ba_tlv(&dev->mt76, skb, params, enable, tx,
+-				    sta_wtbl, wtbl_hdr);
++				    0, sta_wtbl, wtbl_hdr);
+ 
+ 	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+ 				     MCU_EXT_CMD(STA_REC_UPDATE), true);
+@@ -1201,7 +1201,7 @@ mt7615_mcu_uni_rx_ba(struct mt7615_dev *dev,
+ 		return PTR_ERR(wtbl_hdr);
+ 
+ 	mt76_connac_mcu_wtbl_ba_tlv(&dev->mt76, skb, params, enable, false,
+-				    sta_wtbl, wtbl_hdr);
++				    0, sta_wtbl, wtbl_hdr);
+ 
+ 	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+ 				     MCU_UNI_CMD(STA_REC_UPDATE), true);
+diff --git a/mt76_connac_mcu.c b/mt76_connac_mcu.c
+index 6e5cbd69..3b6954dc 100644
+--- a/mt76_connac_mcu.c
++++ b/mt76_connac_mcu.c
+@@ -1148,8 +1148,8 @@ EXPORT_SYMBOL_GPL(mt76_connac_mcu_sta_cmd);
+ 
+ void mt76_connac_mcu_wtbl_ba_tlv(struct mt76_dev *dev, struct sk_buff *skb,
+ 				 struct ieee80211_ampdu_params *params,
+-				 bool enable, bool tx, void *sta_wtbl,
+-				 void *wtbl_tlv)
++				 bool enable, bool tx, u8 band_idx,
++				 void *sta_wtbl, void *wtbl_tlv)
+ {
+ 	struct wtbl_ba *ba;
+ 	struct tlv *tlv;
+@@ -1171,6 +1171,7 @@ void mt76_connac_mcu_wtbl_ba_tlv(struct mt76_dev *dev, struct sk_buff *skb,
+ 		ba->rst_ba_tid = params->tid;
+ 		ba->rst_ba_sel = RST_BA_MAC_TID_MATCH;
+ 		ba->rst_ba_sb = 1;
++		ba->band_idx = band_idx;
+ 	}
+ 
+ 	if (!is_connac_v1(dev)) {
+@@ -1357,8 +1358,8 @@ int mt76_connac_mcu_sta_ba(struct mt76_dev *dev, struct mt76_vif_link *mvif,
+ 	if (IS_ERR(wtbl_hdr))
+ 		return PTR_ERR(wtbl_hdr);
+ 
+-	mt76_connac_mcu_wtbl_ba_tlv(dev, skb, params, enable, tx, sta_wtbl,
+-				    wtbl_hdr);
++	mt76_connac_mcu_wtbl_ba_tlv(dev, skb, params, enable, tx,
++				    mvif->band_idx, sta_wtbl, wtbl_hdr);
+ 
+ 	ret = mt76_connac_mcu_sta_wed_update(dev, skb);
+ 	if (ret) {
+diff --git a/mt76_connac_mcu.h b/mt76_connac_mcu.h
+index 6c96f903..916b20f2 100644
+--- a/mt76_connac_mcu.h
++++ b/mt76_connac_mcu.h
+@@ -2056,8 +2056,8 @@ void mt76_connac_mcu_wtbl_ht_tlv(struct mt76_dev *dev, struct sk_buff *skb,
+ 				 void *wtbl_tlv, bool ht_ldpc, bool vht_ldpc);
+ void mt76_connac_mcu_wtbl_ba_tlv(struct mt76_dev *dev, struct sk_buff *skb,
+ 				 struct ieee80211_ampdu_params *params,
+-				 bool enable, bool tx, void *sta_wtbl,
+-				 void *wtbl_tlv);
++				 bool enable, bool tx, u8 band_idx,
++				 void *sta_wtbl, void *wtbl_tlv);
+ void mt76_connac_mcu_sta_ba_tlv(struct sk_buff *skb,
+ 				struct ieee80211_ampdu_params *params,
+ 				bool enable, bool tx);

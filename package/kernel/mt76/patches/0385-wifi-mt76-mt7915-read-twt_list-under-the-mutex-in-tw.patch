@@ -1,0 +1,48 @@
+From 8db5c6ac4c3f04ee4cc15798bcd30f999e8d077a Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Thu, 19 Nov 2026 13:43:44 +0100
+Subject: [PATCH] wifi: mt76: mt7915: read twt_list under the mutex in
+ twt_stats
+
+mt7915_twt_stats() walks dev->twt_list under rcu_read_lock() alone, but
+the writers of the list use plain list operations under
+dev->mt76.mutex. A read during a teardown can thus loop without end.
+Reachable via the twt_stats debugfs file.
+
+Hold dev->mt76.mutex for the walk, as the writers and
+mt7915_tx_stats_show() do.
+
+Fixes: 34f374f85eff ("mt76: mt7915: add twt_stats knob in debugfs")
+Link: https://patch.msgid.link/20261119124352.1842164-12-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/debugfs.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/mt7915/debugfs.c b/mt7915/debugfs.c
+index 7e561a47..fae2fbcd 100644
+--- a/mt7915/debugfs.c
++++ b/mt7915/debugfs.c
+@@ -1250,11 +1250,11 @@ mt7915_twt_stats(struct seq_file *s, void *data)
+ 	struct mt7915_dev *dev = dev_get_drvdata(s->private);
+ 	struct mt7915_twt_flow *iter;
+ 
+-	rcu_read_lock();
++	mutex_lock(&dev->mt76.mutex);
+ 
+ 	seq_puts(s, "     wcid |       id |    flags |      exp | mantissa");
+ 	seq_puts(s, " | duration |            tsf |\n");
+-	list_for_each_entry_rcu(iter, &dev->twt_list, list)
++	list_for_each_entry(iter, &dev->twt_list, list)
+ 		seq_printf(s,
+ 			"%9d | %8d | %5c%c%c%c | %8d | %8d | %8d | %14lld |\n",
+ 			iter->wcid, iter->id,
+@@ -1265,7 +1265,7 @@ mt7915_twt_stats(struct seq_file *s, void *data)
+ 			iter->exp, iter->mantissa,
+ 			iter->duration, iter->tsf);
+ 
+-	rcu_read_unlock();
++	mutex_unlock(&dev->mt76.mutex);
+ 
+ 	return 0;
+ }

@@ -1,0 +1,44 @@
+From 4c48a17395a579dee933dd8625493b657a855774 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 23 Nov 2026 14:49:16 +0100
+Subject: [PATCH] wifi: mt76: mt7915: divide by the full TWT wake interval
+
+mt7915_mac_add_twt_setup() passes the 64-bit wake interval of a TWT
+request as the 32-bit divisor of div_u64_rem(). An interval that is a
+multiple of 2^32 us thus gives a division by zero, which traps on x86
+with the driver mutex held.
+
+Any device in range can trigger this with one TWT Setup frame. The frame
+is not robust, so it is accepted with the address of any associated
+station. Neither mac80211 nor mt7915_mac_check_twt_req() bounds the
+exponent or the mantissa.
+
+Divide by the full interval with div64_u64_rem().
+
+Fixes: 3782b69d03e7 ("mt76: mt7915: introduce mt7915_mac_add_twt_setup routine")
+Link: https://patch.msgid.link/20261123134920.154270-17-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/mac.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index e3e78f3c..93169200 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -2381,13 +2381,12 @@ void mt7915_mac_add_twt_setup(struct ieee80211_hw *hw,
+ 	if (sta_setup_cmd == TWT_SETUP_CMD_REQUEST ||
+ 	    sta_setup_cmd == TWT_SETUP_CMD_SUGGEST) {
+ 		u64 interval = (u64)le16_to_cpu(twt_agrt->mantissa) << exp;
+-		u64 flow_tsf, curr_tsf;
+-		u32 rem;
++		u64 flow_tsf, curr_tsf, rem;
+ 
+ 		flow->sched = true;
+ 		flow->start_tsf = mt7915_mac_twt_sched_list_add(dev, flow);
+ 		curr_tsf = __mt7915_get_tsf(hw, msta->vif);
+-		div_u64_rem(curr_tsf - flow->start_tsf, interval, &rem);
++		div64_u64_rem(curr_tsf - flow->start_tsf, interval, &rem);
+ 		flow_tsf = curr_tsf + interval - rem;
+ 		twt_agrt->twt = cpu_to_le64(flow_tsf);
+ 	} else {

@@ -1,0 +1,45 @@
+From 4cc2907f0f764c200086fe46effcb38a3f0b5cf0 Mon Sep 17 00:00:00 2001
+From: David Bauer <mail@david-bauer.net>
+Date: Tue, 3 Nov 2026 01:22:09 +0100
+Subject: [PATCH] wifi: mt76: mt7603: avoid deadlock on failed channel config
+
+The synchronous call to mt7603_mac_work locks the global
+mt76 device mutex. This can create a deadlock situation,
+as the lock was already taken in mt76_set_channel.
+
+Instead schedule the next mac_work iteration to happen immediately in
+case a reset is necessary and perform the reset asynchronously.
+
+Signed-off-by: David Bauer <mail@david-bauer.net>
+Link: https://patch.msgid.link/20261103002210.166517-1-mail@david-bauer.net
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7603/main.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/mt7603/main.c b/mt7603/main.c
+index 757664e9..61f24619 100644
+--- a/mt7603/main.c
++++ b/mt7603/main.c
+@@ -172,9 +172,6 @@ int mt7603_set_channel(struct mt76_phy *mphy)
+ 	mt7603_mac_set_timing(dev);
+ 	mt7603_mac_start(dev);
+ 
+-	ieee80211_queue_delayed_work(mt76_hw(dev), &dev->mphy.mac_work,
+-				     msecs_to_jiffies(MT7603_WATCHDOG_TIME));
+-
+ 	/* reset channel stats */
+ 	mt76_clear(dev, MT_MIB_CTL, MT_MIB_CTL_READ_CLR_DIS);
+ 	mt76_set(dev, MT_MIB_CTL,
+@@ -191,9 +188,8 @@ out:
+ 		mt7603_beacon_set_timer(dev, -1, dev->mt76.beacon_int);
+ 
+ 	tasklet_enable(&dev->mt76.pre_tbtt_tasklet);
+-
+-	if (failed)
+-		mt7603_mac_work(&dev->mphy.mac_work.work);
++	ieee80211_queue_delayed_work(mt76_hw(dev), &dev->mphy.mac_work,
++				     failed ? 0 : msecs_to_jiffies(MT7603_WATCHDOG_TIME));
+ 
+ 	return ret;
+ }

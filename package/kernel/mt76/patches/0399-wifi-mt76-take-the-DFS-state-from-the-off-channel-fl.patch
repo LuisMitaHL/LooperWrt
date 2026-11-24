@@ -1,0 +1,56 @@
+From 7382d3036c48ddb199c87b377f9da96d7292eb69 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 23 Nov 2026 14:49:11 +0100
+Subject: [PATCH] wifi: mt76: take the DFS state from the off-channel flag
+
+mt76_phy_dfs_state() gives MT_DFS_STATE_DISABLED while MT76_SCANNING is
+set, which a software scan holds for its whole length. The scan end sets
+the operating channel before drv_sw_scan_complete() clears the bit. So a
+software scan on a DFS channel leaves the radar detector off. A
+remain-on-channel sets no such bit, so the detector follows the radio to
+the ROC channel.
+
+Give MT_DFS_STATE_DISABLED where the current channel is off the
+operating chandef, which phy->offchannel records at each channel set.
+The return to the operating chandef then starts the detector again in
+the same channel set. On mt7996 the detector now keeps running during a
+hardware scan dwell on the operating chandef. During a ROC off a DFS
+channel it is off, until mt76_roc_complete() starts it again.
+
+Fixes: 3f3064486b1a ("mt76: mt7915: fix/rewrite the dfs state handling logic")
+Link: https://patch.msgid.link/20261123134920.154270-12-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mac80211.c | 3 +--
+ scan.c     | 4 ----
+ 2 files changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/mac80211.c b/mac80211.c
+index ce3139b9..ae61187e 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -2224,8 +2224,7 @@ enum mt76_dfs_state mt76_phy_dfs_state(struct mt76_phy *phy)
+ 	struct ieee80211_hw *hw = phy->hw;
+ 	struct mt76_dev *dev = phy->dev;
+ 
+-	if (dev->region == NL80211_DFS_UNSET ||
+-	    test_bit(MT76_SCANNING, &phy->state))
++	if (dev->region == NL80211_DFS_UNSET || phy->offchannel)
+ 		return MT_DFS_STATE_DISABLED;
+ 
+ 	if (!phy->radar_enabled) {
+diff --git a/scan.c b/scan.c
+index 51b182ee..0a5fea9e 100644
+--- a/scan.c
++++ b/scan.c
+@@ -28,10 +28,6 @@ static void mt76_scan_phy_complete(struct mt76_phy *phy, bool abort)
+ 
+ 	clear_bit(MT76_SCANNING, &phy->state);
+ 
+-	/* Re-program the operating channel even when the scan never left it:
+-	 * any channel set during the scan ran with MT76_SCANNING held, which
+-	 * left DFS radar detection disabled
+-	 */
+ 	if (phy->main_chandef.chan &&
+ 	    !test_bit(MT76_MCU_RESET, &dev->phy.state)) {
+ 		bool offchannel = phy->offchannel;

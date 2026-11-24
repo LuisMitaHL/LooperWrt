@@ -1,0 +1,36 @@
+From 00c3c8ca635bbf2b8a231b5a9cc26c50ab92d827 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Sat, 21 Nov 2026 13:09:23 +0100
+Subject: [PATCH] wifi: mt76: mt7915: abort a background CAC at a full reset
+
+A full reset reloads the firmware, which then runs no background radar
+chain, and nothing tells cfg80211. A background CAC in progress thus
+goes on without radar detection, and cfg80211 marks its channel
+available when the CAC time ends.
+
+Report the CAC aborted to cfg80211 after the firmware reload. cfg80211
+then stops the chain through the driver, which clears dev->rdd2_phy,
+and user space can start a new CAC. A restart of the chain would leave
+a gap without radar detection in the CAC.
+
+Fixes: 8a55712d124f ("wifi: mt76: mt7915: enable full system reset support")
+Link: https://patch.msgid.link/20261121120926.3603979-14-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/mac.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index c44237ec..ad72d421 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -1467,6 +1467,9 @@ mt7915_mac_full_reset(struct mt7915_dev *dev)
+ 	if (i == 10)
+ 		dev_err(dev->mt76.dev, "chip full reset failed\n");
+ 
++	if (dev->rdd2_phy)
++		cfg80211_background_cac_abort(dev->rdd2_phy->mt76->hw->wiphy);
++
+ 	dev->phy.omac_mask = 0;
+ 	if (phy2)
+ 		phy2->omac_mask = 0;

@@ -1,0 +1,148 @@
+From 9571590bea6f6ea02cd5d38247e8d940291b9512 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Tue, 17 Nov 2026 19:01:30 +0100
+Subject: [PATCH] wifi: mt76: guard the tx_list of every phy with one lock
+
+mt76_tx() lists a wcid on the tx_list of the phy its caller passes,
+under the tx_lock of that phy, while mt76_wcid_cleanup() unlists it
+under the tx_lock of wcid->phy_idx. mt7996_tx() and
+mt76_offchannel_send_nullfunc() can list a wcid on the phy of another
+link, so no common lock guards its node, and the tx_list gets corrupted.
+
+Guard the tx_list of every phy with one lock per device.
+
+Fixes: ce35ecffc96e ("wifi: mt76: mt7996: fix MLD ID in MAC TXD and HIF TXP")
+Fixes: 381733b3a14a ("wifi: mt76: send nullfunc PS frames on offchannel transitions")
+Reviewed-by: Lorenzo Bianconi <lorenzo@kernel.org>
+Link: https://patch.msgid.link/20261117180134.2940930-15-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mac80211.c |  7 +++----
+ mt76.h     |  3 ++-
+ tx.c       | 13 +++++++------
+ 3 files changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/mac80211.c b/mac80211.c
+index e7e881c5..37f018a1 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -431,7 +431,6 @@ mt76_phy_init(struct mt76_phy *phy, struct ieee80211_hw *hw)
+ 	int i;
+ 
+ 	INIT_LIST_HEAD(&phy->tx_list);
+-	spin_lock_init(&phy->tx_lock);
+ 	for (i = 0; i < ARRAY_SIZE(phy->rx_amsdu); i++)
+ 		spin_lock_init(&phy->rx_amsdu[i].lock);
+ 	INIT_DELAYED_WORK(&phy->roc_work, mt76_roc_complete_work);
+@@ -753,6 +752,7 @@ mt76_alloc_device(struct device *pdev, unsigned int size,
+ 	spin_lock_init(&dev->cc_lock);
+ 	spin_lock_init(&dev->status_lock);
+ 	spin_lock_init(&dev->wed_lock);
++	spin_lock_init(&dev->tx_lock);
+ 	mutex_init(&dev->mutex);
+ 	init_waitqueue_head(&dev->tx_wait);
+ 
+@@ -1834,7 +1834,6 @@ EXPORT_SYMBOL_GPL(mt76_wcid_init);
+ 
+ void mt76_wcid_cleanup(struct mt76_dev *dev, struct mt76_wcid *wcid)
+ {
+-	struct mt76_phy *phy = mt76_dev_phy(dev, wcid->phy_idx);
+ 	struct ieee80211_hw *hw;
+ 	struct sk_buff_head list;
+ 	struct sk_buff *skb;
+@@ -1856,7 +1855,7 @@ void mt76_wcid_cleanup(struct mt76_dev *dev, struct mt76_wcid *wcid)
+ 		list_del_init(&wcid->poll_list);
+ 	spin_unlock_bh(&dev->sta_poll_lock);
+ 
+-	spin_lock_bh(&phy->tx_lock);
++	spin_lock_bh(&dev->tx_lock);
+ 
+ 	if (!list_empty(&wcid->tx_list))
+ 		list_del_init(&wcid->tx_list);
+@@ -1869,7 +1868,7 @@ void mt76_wcid_cleanup(struct mt76_dev *dev, struct mt76_wcid *wcid)
+ 	skb_queue_splice_tail_init(&wcid->tx_offchannel, &list);
+ 	spin_unlock(&wcid->tx_offchannel.lock);
+ 
+-	spin_unlock_bh(&phy->tx_lock);
++	spin_unlock_bh(&dev->tx_lock);
+ 
+ 	while ((skb = __skb_dequeue(&list)) != NULL) {
+ 		hw = mt76_tx_status_get_hw(dev, skb);
+diff --git a/mt76.h b/mt76.h
+index 880c228a..8e1b4d8c 100644
+--- a/mt76.h
++++ b/mt76.h
+@@ -872,7 +872,6 @@ struct mt76_phy {
+ 	unsigned int num_sta;
+ 	u8 band_idx;
+ 
+-	spinlock_t tx_lock;
+ 	struct list_head tx_list;
+ 	struct mt76_queue *q_tx[__MT_TXQ_MAX];
+ 
+@@ -988,6 +987,8 @@ struct mt76_dev {
+ 
+ 	struct mt76_worker tx_worker;
+ 	struct napi_struct tx_napi;
++	/* protects the tx_list of every phy */
++	spinlock_t tx_lock;
+ 
+ 	spinlock_t token_lock;
+ 	struct idr token;
+diff --git a/tx.c b/tx.c
+index 45e823a7..7a93614d 100644
+--- a/tx.c
++++ b/tx.c
+@@ -401,10 +401,10 @@ mt76_tx(struct mt76_phy *phy, struct ieee80211_sta *sta,
+ 	__skb_queue_tail(head, skb);
+ 	spin_unlock_bh(&head->lock);
+ 
+-	spin_lock_bh(&phy->tx_lock);
++	spin_lock_bh(&phy->dev->tx_lock);
+ 	if (list_empty(&wcid->tx_list))
+ 		list_add_tail(&wcid->tx_list, &phy->tx_list);
+-	spin_unlock_bh(&phy->tx_lock);
++	spin_unlock_bh(&phy->dev->tx_lock);
+ 
+ 	mt76_worker_schedule(&phy->dev->tx_worker);
+ }
+@@ -769,6 +769,7 @@ mt76_txq_schedule_pending_wcid(struct mt76_phy *phy, struct mt76_wcid *wcid,
+ 
+ void mt76_txq_schedule_pending(struct mt76_phy *phy)
+ {
++	struct mt76_dev *dev = phy->dev;
+ 	LIST_HEAD(tx_list);
+ 	int ret = 0;
+ 
+@@ -778,7 +779,7 @@ void mt76_txq_schedule_pending(struct mt76_phy *phy)
+ 	local_bh_disable();
+ 	rcu_read_lock();
+ 
+-	spin_lock(&phy->tx_lock);
++	spin_lock(&dev->tx_lock);
+ 	list_splice_init(&phy->tx_list, &tx_list);
+ 	while (!list_empty(&tx_list)) {
+ 		struct mt76_wcid *wcid;
+@@ -786,19 +787,19 @@ void mt76_txq_schedule_pending(struct mt76_phy *phy)
+ 		wcid = list_first_entry(&tx_list, struct mt76_wcid, tx_list);
+ 		list_del_init(&wcid->tx_list);
+ 
+-		spin_unlock(&phy->tx_lock);
++		spin_unlock(&dev->tx_lock);
+ 		if (ret >= 0)
+ 			ret = mt76_txq_schedule_pending_wcid(phy, wcid, &wcid->tx_offchannel);
+ 		if (ret >= 0 && !phy->offchannel)
+ 			ret = mt76_txq_schedule_pending_wcid(phy, wcid, &wcid->tx_pending);
+-		spin_lock(&phy->tx_lock);
++		spin_lock(&dev->tx_lock);
+ 
+ 		if ((!skb_queue_empty(&wcid->tx_pending) ||
+ 		     !skb_queue_empty(&wcid->tx_offchannel)) &&
+ 		    list_empty(&wcid->tx_list))
+ 			list_add_tail(&wcid->tx_list, &phy->tx_list);
+ 	}
+-	spin_unlock(&phy->tx_lock);
++	spin_unlock(&dev->tx_lock);
+ 
+ 	rcu_read_unlock();
+ 	local_bh_enable();

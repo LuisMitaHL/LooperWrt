@@ -1,0 +1,79 @@
+From 22f7ff9be59890cb10cde16cc25a30f78b504f23 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Wed, 18 Nov 2026 17:18:27 +0100
+Subject: [PATCH] wifi: mt76: mt7915: read a new MIB baseline after the
+ firmware reload
+
+mt7915_mcu_get_chan_mib_info() adds the difference between the MIB
+airtime counters of the firmware and the baseline in phy->state_ts to
+the channel state. Since the full system reset was added,
+mt7915_mac_restart() loads the firmware again, which counts from zero,
+but only the phy that mt7915_run() starts first reads a new baseline.
+On a DBDC chip the first survey update of the other phy after the reset
+thus subtracts the counts of the old firmware, and the busy, rx and tx
+times of a survey dump can wrap below zero.
+
+Read a new baseline for each running phy at the end of a successful
+restart. A phy that does not run reads it at its first start instead,
+as on mt7996, since the reloaded firmware has not started it. This also
+gives the ext phy a baseline when it starts while the main phy runs.
+
+Fixes: 8a55712d124f ("wifi: mt76: mt7915: enable full system reset support")
+Link: https://patch.msgid.link/20261118161827.1208649-16-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt7915/mac.c    | 11 +++++++++++
+ mt7915/main.c   |  4 +++-
+ mt7915/mt7915.h |  1 +
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index 2a88aa37..87304a7b 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -1405,6 +1405,17 @@ mt7915_mac_restart(struct mt7915_dev *dev)
+ 			goto out;
+ 	}
+ 
++	/* the reloaded firmware counts the MIB airtime from zero */
++	if (!run_main)
++		dev->phy.counter_reset = false;
++	else if (!ret)
++		ret = mt7915_mcu_get_chan_mib_info(&dev->phy, true);
++
++	if (phy2 && !run_ext)
++		phy2->counter_reset = false;
++	else if (run_ext && !ret)
++		ret = mt7915_mcu_get_chan_mib_info(phy2, true);
++
+ out:
+ 	/* reset done */
+ 	clear_bit(MT76_RESET, &dev->mphy.state);
+diff --git a/mt7915/main.c b/mt7915/main.c
+index 7d43d2ed..30652925 100644
+--- a/mt7915/main.c
++++ b/mt7915/main.c
+@@ -87,8 +87,10 @@ int mt7915_run(struct ieee80211_hw *hw)
+ 		ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,
+ 					     MT7915_WATCHDOG_TIME);
+ 
+-	if (!running)
++	if (!running || !phy->counter_reset) {
+ 		mt7915_mac_reset_counters(phy);
++		phy->counter_reset = true;
++	}
+ 
+ out:
+ 	return ret;
+diff --git a/mt7915/mt7915.h b/mt7915/mt7915.h
+index 7ee9bed8..eb0dc92d 100644
+--- a/mt7915/mt7915.h
++++ b/mt7915/mt7915.h
+@@ -237,6 +237,7 @@ struct mt7915_phy {
+ 	struct mt76_mib_stats mib;
+ 	struct mt76_channel_state state_ts;
+ 
++	bool counter_reset;
+ 	bool sku_limit_en:1;
+ 	bool sku_path_en:1;
+ 

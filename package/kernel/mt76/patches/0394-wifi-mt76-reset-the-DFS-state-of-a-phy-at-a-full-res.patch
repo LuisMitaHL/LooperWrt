@@ -1,0 +1,36 @@
+From 81e8be1d610abd0546eb9c4bfd994d362034416e Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Sat, 21 Nov 2026 13:09:21 +0100
+Subject: [PATCH] wifi: mt76: reset the DFS state of a phy at a full reset
+
+mt76_reset_device() keeps phy->dfs_state, while the firmware loaded by
+the full reset runs no radar detector until the driver starts it. The
+channel set of the reconfig on the same channel then finds the DFS
+state unchanged and sends no RDD command. An AP on a DFS channel thus
+transmits without radar detection after the reset.
+
+Set the DFS state to unknown at a full reset, as a channel change does.
+The reconfig then starts the radar detector again. A CAC across the
+reset still has no radar detection from the reset to the reconfig.
+mac80211 gives the driver no way to abort that CAC.
+
+Fixes: 8a55712d124f ("wifi: mt76: mt7915: enable full system reset support")
+Fixes: 27015b6fbcca ("wifi: mt76: mt7996: enable full system reset support")
+Link: https://patch.msgid.link/20261121120926.3603979-12-nbd@nbd.name
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mac80211.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/mac80211.c b/mac80211.c
+index ae1e67a2..ce3139b9 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -908,6 +908,7 @@ static void mt76_reset_phy(struct mt76_phy *phy)
+ 
+ 	phy->num_sta = 0;
+ 	phy->chanctx = NULL;
++	phy->dfs_state = MT_DFS_STATE_UNKNOWN;
+ 	mt76_roc_complete(phy);
+ }
+ 

@@ -1,0 +1,37 @@
+From 945b8e4a95571d14225306d0665c4c76147d457a Mon Sep 17 00:00:00 2001
+From: David Bauer <mail@david-bauer.net>
+Date: Tue, 3 Nov 2026 01:45:52 +0100
+Subject: [PATCH] wifi: mt76: mt76x02: only read QoS control for QoS data
+ frames
+
+Only read the QoS control field for received QoS data frames.
+For any other frame the pointer might refer to bytes beyond
+the 802.11 header, so the read picks up payload bytes or runs
+past the end of the frame.
+
+Signed-off-by: David Bauer <mail@david-bauer.net>
+Link: https://patch.msgid.link/20261103004553.185692-1-mail@david-bauer.net
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ mt76x02_mac.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/mt76x02_mac.c b/mt76x02_mac.c
+index 457767bb..3a08b57b 100644
+--- a/mt76x02_mac.c
++++ b/mt76x02_mac.c
+@@ -897,10 +897,12 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
+ 	status->freq = dev->mphy.chandef.chan->center_freq;
+ 	status->band = dev->mphy.chandef.chan->band;
+ 
+-	hdr = (struct ieee80211_hdr *)skb->data;
+-	status->qos_ctl = *ieee80211_get_qos_ctl(hdr);
+ 	status->seqno = FIELD_GET(MT_RXWI_SN, tid_sn);
+ 
++	hdr = (struct ieee80211_hdr *)skb->data;
++	if (ieee80211_is_data_qos(hdr->frame_control))
++		status->qos_ctl = *ieee80211_get_qos_ctl(hdr);
++
+ 	return mt76x02_mac_process_rate(dev, status, rate);
+ }
+ 
