@@ -1,0 +1,183 @@
+From 4c00063f36ef62d59e83f2ed505bb56bf679e8ed Mon Sep 17 00:00:00 2001
+From: Oleh Shcherba <scherbaoleg4@gmail.com>
+Date: Sat, 17 Oct 2026 00:08:02 +0300
+Subject: [PATCH] wifi: mt76: mt7603: add hwmon temperature sensor
+
+Expose the on-chip thermal sensor through hwmon, as mt7615 and mt7915
+already do.
+
+Unlike the newer chips, the temperature is not queried from the MCU.
+On MT7603 and MT7628 the vendor driver reads the raw ADC value straight
+from the TOP register 0x80022000, bits 14:8, and converts it with the
+factory calibration stored in the EEPROM:
+
+  T = (adc - ref) * (56 + slope) / 30 + offset + 28
+
+- ref: EEPROM 0x55 bits 6:0 if bit 7 is set, 52 otherwise
+- slope: EEPROM 0x54 bits 4:0, signed, if bit 7 of 0x53 is set,
+  0 otherwise
+- offset: EEPROM 0xf8
+
+0x53 and 0x54 are 5 GHz fields in the shared EEPROM layout, which these
+2.4 GHz only chips reuse for the thermal ADC.
+
+The register sits behind the shared remap window, so it is read under
+the mt76 mutex. The hw is already registered when the hwmon device is
+created, so a failure there only warns: failing the probe at that point
+would free a registered device.
+
+Signed-off-by: Oleh Shcherba <scherbaoleg4@gmail.com>
+---
+ mt7603/eeprom.h | 12 ++++++++
+ mt7603/init.c   | 74 +++++++++++++++++++++++++++++++++++++++++++++++++
+ mt7603/regs.h   |  3 ++
+ 3 files changed, 89 insertions(+)
+
+diff --git a/mt7603/eeprom.h b/mt7603/eeprom.h
+index b6b746d1e..9f262114c 100644
+--- a/mt7603/eeprom.h
++++ b/mt7603/eeprom.h
+@@ -24,6 +24,10 @@ enum mt7603_eeprom_field {
+ 
+ 	MT_EE_TX_POWER_EXT_PA_5G =		0x054,
+ 
++	/* 2.4 GHz only chips reuse these 5 GHz bytes for the thermal ADC */
++	MT_EE_THADC_ANALOG_PART =		0x053,
++	MT_EE_THADC_SLOPE =			0x054,
++
+ 	MT_EE_TEMP_SENSOR_CAL =			0x055,
+ 
+ 	MT_EE_TX_POWER_0_START_2G =		0x056,
+@@ -76,6 +80,8 @@ enum mt7603_eeprom_field {
+ 	MT_EE_XTAL_TRIM_3_COMP =		0x0f6,
+ 	MT_EE_XTAL_WF_RFCAL =			0x0f7,
+ 
++	MT_EE_THERMAL_COMP_OFFSET =		0x0f8,
++
+ 	__MT_EE_MAX
+ };
+ 
+@@ -88,4 +94,10 @@ enum mt7603_eeprom_source {
+ #define MT_EE_NIC_CONF_0_RX_PATH		GENMASK(3, 0)
+ #define MT_EE_NIC_CONF_0_TX_PATH		GENMASK(7, 4)
+ 
++#define MT_EE_THADC_ANALOG_PART_EN		BIT(7)
++#define MT_EE_THADC_SLOPE_VAL			GENMASK(4, 0)
++
++#define MT_EE_TEMP_SENSOR_CAL_EN		BIT(7)
++#define MT_EE_TEMP_SENSOR_CAL_ADC		GENMASK(6, 0)
++
+ #endif
+diff --git a/mt7603/init.c b/mt7603/init.c
+index 218ec406d..070854834 100644
+--- a/mt7603/init.c
++++ b/mt7603/init.c
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: BSD-3-Clause-Clear
+ 
+ #include <linux/etherdevice.h>
++#include <linux/hwmon.h>
++#include <linux/hwmon-sysfs.h>
+ #include "mt7603.h"
+ #include "mac.h"
+ #include "eeprom.h"
+@@ -493,6 +495,73 @@ mt7603_init_txpower(struct mt7603_dev *dev,
+ 	}
+ }
+ 
++static int
++mt7603_get_temperature(struct mt7603_dev *dev)
++{
++	u8 *eeprom = (u8 *)dev->mt76.eeprom.data;
++	int adc, ref_adc = 52, slope = 0;
++
++	adc = mt76_get_field(dev, MT_TOP_THERMAL, MT_TOP_THERMAL_ADC);
++
++	if (eeprom[MT_EE_TEMP_SENSOR_CAL] & MT_EE_TEMP_SENSOR_CAL_EN)
++		ref_adc = FIELD_GET(MT_EE_TEMP_SENSOR_CAL_ADC,
++				    eeprom[MT_EE_TEMP_SENSOR_CAL]);
++
++	if (eeprom[MT_EE_THADC_ANALOG_PART] & MT_EE_THADC_ANALOG_PART_EN) {
++		slope = FIELD_GET(MT_EE_THADC_SLOPE_VAL,
++				  eeprom[MT_EE_THADC_SLOPE]);
++		if (slope > 16)
++			slope -= 32;
++	}
++
++	return (adc - ref_adc) * (56 + slope) / 30 +
++	       eeprom[MT_EE_THERMAL_COMP_OFFSET] + 28;
++}
++
++static ssize_t mt7603_thermal_show_temp(struct device *dev,
++					struct device_attribute *attr,
++					char *buf)
++{
++	struct mt7603_dev *mdev = dev_get_drvdata(dev);
++	int temperature;
++
++	/* the sensor is read through the shared remap window */
++	mutex_lock(&mdev->mt76.mutex);
++	temperature = mt7603_get_temperature(mdev);
++	mutex_unlock(&mdev->mt76.mutex);
++
++	/* display in millidegree celcius */
++	return sprintf(buf, "%d\n", temperature * 1000);
++}
++
++static SENSOR_DEVICE_ATTR(temp1_input, 0444, mt7603_thermal_show_temp,
++			  NULL, 0);
++
++static struct attribute *mt7603_hwmon_attrs[] = {
++	&sensor_dev_attr_temp1_input.dev_attr.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(mt7603_hwmon);
++
++static int mt7603_thermal_init(struct mt7603_dev *dev)
++{
++	struct wiphy *wiphy = mt76_hw(dev)->wiphy;
++	struct device *hwmon;
++	const char *name;
++
++	if (!IS_REACHABLE(CONFIG_HWMON))
++		return 0;
++
++	name = devm_kasprintf(&wiphy->dev, GFP_KERNEL, "mt7603_%s",
++			      wiphy_name(wiphy));
++	if (!name)
++		return -ENOMEM;
++
++	hwmon = devm_hwmon_device_register_with_groups(&wiphy->dev, name, dev,
++						       mt7603_hwmon_groups);
++	return PTR_ERR_OR_ZERO(hwmon);
++}
++
+ int mt7603_register_device(struct mt7603_dev *dev)
+ {
+ 	struct mt76_bus_ops *bus_ops;
+@@ -559,6 +628,11 @@ int mt7603_register_device(struct mt7603_dev *dev)
+ 	mt7603_init_debugfs(dev);
+ 	mt7603_init_txpower(dev, &dev->mphy.sband_2g.sband);
+ 
++	/* the hw is registered already, so do not fail the probe here */
++	ret = mt7603_thermal_init(dev);
++	if (ret)
++		dev_warn(dev->mt76.dev, "failed to register hwmon: %d\n", ret);
++
+ 	return 0;
+ }
+ 
+diff --git a/mt7603/regs.h b/mt7603/regs.h
+index 97942f5eb..5b077d52a 100644
+--- a/mt7603/regs.h
++++ b/mt7603/regs.h
+@@ -583,6 +583,9 @@ enum {
+ #define MT_TX_HW_QUEUE_BCN		7
+ #define MT_TX_HW_QUEUE_BMC		8
+ 
++#define MT_TOP_THERMAL			0x80022000
++#define MT_TOP_THERMAL_ADC		GENMASK(14, 8)
++
+ #define MT_LED_BASE_PHYS		0x80024000
+ #define MT_LED_PHYS(_n)			(MT_LED_BASE_PHYS + (_n))
+ 
